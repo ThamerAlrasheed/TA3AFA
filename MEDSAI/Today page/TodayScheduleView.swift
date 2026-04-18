@@ -1,0 +1,476 @@
+import SwiftUI
+import UserNotifications
+
+/// "Today" page:
+/// - Shows today's Appointments (tap to see details) with a checkmark.
+/// - Shows today's Doses from midnight → **tomorrow’s wake time** (includes sleeping window).
+struct TodayScheduleView: View {
+    @EnvironmentObject var settings: AppSettings
+
+    // Repos (match your project types)
+    @StateObject private var medsRepo = UserMedsRepo()
+    @StateObject private var apptsRepo = AppointmentsRepo()
+
+    // Today anchor (recomputed on appear)
+    @State private var today: Date = Date()
+
+    // Derived
+    @State private var todaysDoses: [(Date, LocalMed)] = []
+
+    // Completion state (persistent via UserDefaults so actions from notifications are reflected)
+    @State private var completedAppointments: Set<String> = CompletionStore.completedAppointments()
+    @State private var completedDoseKeys: Set<String> = CompletionStore.completedDoses()
+
+    // Sheet state for viewing appointment details
+    @State private var viewingAppointment: Appointment? = nil
+
+    var body: some View {
+        NavigationStack {
+            List {
+                // MARK: Appointments section
+                Section(header: Text(sectionTitle())) {
+                    appointmentsSection
+                }
+
+                // MARK: Doses section
+                Section {
+                    dosesSection
+                }
+
+                // MARK: Notifications helper row (debug/visibility)
+                Section {
+                    Button("Reschedule Notifications for Today") {
+                        Task { await scheduleNotificationsForToday() }
+                    }
+                } footer: {
+                    Text("Appointments: a day before and 30 min before. Doses: at time; follow-up in 15 minutes if not ticked.")
+                }
+            }
+            .listStyle(.insetGrouped)
+            .navigationTitle(settings.activePatientID == nil ? "Today" : "Family Member's Today")
+            .toolbar {
+                if !settings.familyMembers.isEmpty {
+                    ToolbarItem(placement: .topBarLeading) {
+                        Menu {
+                            Button {
+                                settings.activePatientID = nil
+                            } label: {
+                                Label("My Meds", systemImage: "person.circle")
+                            }
+                            
+                            ForEach(settings.familyMembers, id: \.self) { patientId in
+                                Button {
+                                    settings.activePatientID = patientId
+                                } label: {
+                                    Label("Dad's Meds", systemImage: "person.2")
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Image(systemName: "person.2.circle.fill")
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 10, weight: .bold))
+                            }
+                            .foregroundStyle(.green)
+                        }
+                    }
+                }
+            }
+            .onAppear {
+                today = Calendar.current.startOfDay(for: Date())
+                medsRepo.start()
+                apptsRepo.start()
+                recomputeDoses()
+
+                // Refresh completion state (in case a background action toggled it)
+                completedAppointments = CompletionStore.completedAppointments()
+                completedDoseKeys = CompletionStore.completedDoses()
+
+                Task {
+                    await NotificationsManager.shared.requestAuthorization()
+                    await scheduleNotificationsForToday()
+                }
+            }
+            .onChange(of: medsRepo.meds) { _, _ in
+                recomputeDoses()
+                Task { await scheduleNotificationsForToday() }
+            }
+            .onChange(of: settings.breakfast) { _, _ in reactToSettings() }
+            .onChange(of: settings.lunch)     { _, _ in reactToSettings() }
+            .onChange(of: settings.dinner)    { _, _ in reactToSettings() }
+            .onChange(of: settings.bedtime)   { _, _ in reactToSettings() }
+            .onChange(of: settings.wakeup)    { _, _ in reactToSettings() }
+
+            // 🔔 NEW: live-refresh when a notification action marks dose done in background
+            .onReceive(NotificationCenter.default.publisher(for: .doseCompletionChanged)) { _ in
+                completedDoseKeys = CompletionStore.completedDoses()
+            }
+
+            .sheet(item: $viewingAppointment) { appt in
+                AppointmentDetailSheet(appointment: appt)
+                    .presentationDetents([.medium, .large])
+            }
+        }
+    }
+
+    private func reactToSettings() {
+        recomputeDoses()
+        Task { await scheduleNotificationsForToday() }
+    }
+
+    // MARK: - Appointments UI
+
+    @ViewBuilder
+    private var appointmentsSection: some View {
+        if apptsRepo.isLoading {
+            HStack { ProgressView(); Text("Loading appointments…") }
+        } else if let err = apptsRepo.errorMessage {
+            ContentUnavailableView("Couldn't load appointments",
+                                   systemImage: "exclamationmark.triangle",
+                                   description: Text(err))
+        } else {
+            let items = apptsRepo.appointments(on: today).sorted(by: { $0.date < $1.date })
+            if items.isEmpty {
+                ContentUnavailableView("No appointments today",
+                                       systemImage: "calendar.badge.clock")
+            } else {
+                ForEach(items) { appt in
+                    TodayRow(
+                        isDone: completedAppointments.contains(appt.id),
+                        leadingIcon: "",
+                        title: appt.titleWithEmoji,
+                        subtitle: apptSubtitle(appt),
+                        timeText: timeOnly(appt.date),
+                        toggle: { toggleAppointment(appt.id) },
+                        onTap: { viewingAppointment = appt }
+                    )
+                }
+            }
+        }
+    }
+
+    // MARK: - Doses UI
+
+    @ViewBuilder
+    private var dosesSection: some View {
+        if medsRepo.isLoading {
+            HStack { ProgressView(); Text("Loading medications…") }
+        } else if let err = medsRepo.errorMessage {
+            ContentUnavailableView("Couldn't load medications",
+                                   systemImage: "exclamationmark.triangle",
+                                   description: Text(err))
+        } else if todaysDoses.isEmpty {
+            ContentUnavailableView("No doses scheduled today",
+                                   systemImage: "pills")
+        } else {
+            ForEach(todaysDoses.indices, id: \.self) { i in
+                let (time, med) = todaysDoses[i]
+                let key = doseKey(time: time, medID: med.id)
+
+                TodayRow(
+                    isDone: completedDoseKeys.contains(key),
+                    leadingIcon: "💊",
+                    title: med.name,
+                    subtitle: "\(med.dosage) • \(med.frequencyPerDay)x/day • \(med.foodRule.label)",
+                    timeText: time.formatted(date: .omitted, time: .shortened),
+                    toggle: {
+                        toggleDose(key)
+                        NotificationsManager.shared.cancel(ids: ["DOSE_FU_\(key)"])
+                    },
+                    onTap: {
+                        toggleDose(key)
+                        NotificationsManager.shared.cancel(ids: ["DOSE_FU_\(key)"])
+                    }
+                )
+            }
+        }
+    }
+
+    // MARK: - Build Doses for today (midnight → tomorrow's wake)
+
+    private func recomputeDoses() {
+        guard medsRepo.isSignedIn else {
+            todaysDoses = []
+            return
+        }
+
+        let cal = Calendar.current
+        let dayStart = cal.startOfDay(for: today)
+        let dayEnd   = cal.date(byAdding: .day, value: 1, to: dayStart)!
+
+        // Wider "today" window upper bound = **tomorrow's wake**
+        let nextWake = cal.date(
+            bySettingHour: settings.wakeup.hour ?? 7,
+            minute: settings.wakeup.minute ?? 0,
+            second: 0,
+            of: dayEnd
+        ) ?? dayEnd.addingTimeInterval(7 * 3600)
+
+        // Day-overlap: treat meds starting later today as active today
+        let active = medsRepo.meds.filter { med in
+            guard !med.isArchived else { return false }
+            return med.startDate < dayEnd && med.endDate >= dayStart
+        }
+        guard !active.isEmpty else {
+            todaysDoses = []
+            return
+        }
+
+        // Adapt LocalMed -> Medication (keep SAME IDs)
+        let adapted: [Medication] = active.map { m in
+            Medication(
+                id: m.id,
+                name: m.name,
+                dosage: m.dosage,
+                frequencyPerDay: m.frequencyPerDay,
+                startDate: m.startDate,
+                endDate: m.endDate,
+                foodRule: m.foodRule,
+                notes: m.notes,
+                ingredients: m.ingredients,
+                minIntervalHours: m.minIntervalHours
+            )
+        }
+
+        let pairs = Scheduler.buildAdherenceSchedule(
+            meds: adapted,
+            settings: settings,
+            date: dayStart
+        )
+
+        // Map back to LocalMed for display, filtering to today (incl. sleeping window)
+        let byId: [String: LocalMed] = Dictionary(uniqueKeysWithValues: active.map { ($0.id, $0) })
+        todaysDoses = pairs
+            .filter { (t, _) in t >= dayStart && t < nextWake }
+            .compactMap { (t, med) in byId[med.id].map { (t, $0) } }
+            .sorted { $0.0 < $1.0 }
+    }
+
+    // MARK: - Notifications (for *today*)
+
+    private func scheduleNotificationsForToday() async {
+        _ = await NotificationsManager.shared.requestAuthorization()
+
+        let idsToCancel = buildAllNotificationIDsForToday()
+        NotificationsManager.shared.cancel(ids: idsToCancel)
+
+        // Appointments: schedule one day before (at user's bedtime) + 30 minutes before (future only)
+        let appts = apptsRepo.appointments(on: today)
+        for appt in appts {
+            let t = appt.date
+            // 1) Day before at bedtime
+            if let bed = Calendar.current.date(bySettingHour: settings.bedtime.hour ?? 22,
+                                               minute: settings.bedtime.minute ?? 0,
+                                               second: 0,
+                                               of: Calendar.current.date(byAdding: .day, value: -1, to: t) ?? t) {
+                NotificationsManager.shared.schedule(
+                    id: "APPT_1D_\(appt.id)",
+                    title: "Appointment tomorrow: \(appt.titleWithEmoji)",
+                    body: timeOnly(t) + (appt.location?.isEmpty == false ? " • \(appt.location!)" : ""),
+                    at: bed,
+                    categoryId: NotificationsManager.IDs.apptCategory,
+                    userInfo: ["appointmentId": appt.id]
+                )
+            }
+
+            // 2) Thirty minutes before
+            let thirtyBefore = t.addingTimeInterval(-30 * 60)
+            NotificationsManager.shared.schedule(
+                id: "APPT_30_\(appt.id)",
+                title: "Your “\(appt.titleWithEmoji)” appointment is in 30 mins",
+                body: timeOnly(t) + (appt.location?.isEmpty == false ? " • \(appt.location!)" : ""),
+                at: thirtyBefore,
+                categoryId: NotificationsManager.IDs.apptCategory,
+                userInfo: ["appointmentId": appt.id]
+            )
+        }
+
+        // Doses: at time + follow-up 15 minutes later (if not completed)
+        for (time, med) in todaysDoses {
+            let key = doseKey(time: time, medID: med.id)
+            let title = "Time to take \(med.name)"
+            let body = "\(med.dosage) • \(foodRuleLabel(med.foodRule))"
+
+            NotificationsManager.shared.schedule(
+                id: "DOSE_\(key)",
+                title: title,
+                body: body,
+                at: time,
+                categoryId: NotificationsManager.IDs.doseCategory,
+                userInfo: ["doseKey": key]
+            )
+
+            if !completedDoseKeys.contains(key) {
+                let fu = time.addingTimeInterval(15 * 60)
+                NotificationsManager.shared.schedule(
+                    id: "DOSE_FU_\(key)",
+                    title: "Did you take your med?",
+                    body: "\(med.name) — \(med.dosage)",
+                    at: fu,
+                    categoryId: NotificationsManager.IDs.doseCategory,
+                    userInfo: ["doseKey": key]
+                )
+            }
+        }
+    }
+
+    private func buildAllNotificationIDsForToday() -> [String] {
+        var ids: [String] = []
+        for appt in apptsRepo.appointments(on: today) {
+            ids.append("APPT_1D_\(appt.id)")
+            ids.append("APPT_30_\(appt.id)")
+        }
+        for (time, med) in todaysDoses {
+            let key = doseKey(time: time, medID: med.id)
+            ids.append("DOSE_\(key)")
+            ids.append("DOSE_FU_\(key)")
+        }
+        return ids
+    }
+
+    // MARK: - Completion toggles
+
+    private func toggleAppointment(_ id: String) {
+        if completedAppointments.contains(id) {
+            completedAppointments.remove(id)
+        } else {
+            completedAppointments.insert(id)
+        }
+        CompletionStore.setCompletedAppointments(completedAppointments)
+    }
+
+    private func toggleDose(_ key: String) {
+        if completedDoseKeys.contains(key) {
+            completedDoseKeys.remove(key)
+        } else {
+            completedDoseKeys.insert(key)
+        }
+        CompletionStore.setCompletedDoses(completedDoseKeys)
+    }
+
+    // MARK: - Helpers
+
+    private func apptSubtitle(_ appt: Appointment) -> String {
+        var parts: [String] = []
+        if let loc = appt.location, !loc.isEmpty { parts.append(loc) }
+        if let notes = appt.notes, !notes.isEmpty { parts.append(notes) }
+        return parts.isEmpty ? "" : parts.joined(separator: " • ")
+    }
+
+    private func sectionTitle() -> String {
+        let df = DateFormatter()
+        df.dateStyle = .full
+        df.timeStyle = .none
+        return df.string(from: today)
+    }
+
+    private func foodRuleLabel(_ rule: FoodRule) -> String {
+        switch rule {
+        case .beforeFood: return "Before food"
+        case .afterFood:  return "After food"
+        case .none:       return "No food rule"
+        }
+    }
+
+    private func timeOnly(_ date: Date) -> String {
+        date.formatted(date: .omitted, time: .shortened)
+    }
+
+    /// Stable unique key for a dose row (per med per time)
+    private func doseKey(time: Date, medID: String) -> String {
+        "\(medID)_\(Int(time.timeIntervalSince1970))"
+    }
+}
+
+// MARK: - Reusable "Today" row with a tick and tap
+private struct TodayRow: View {
+    let isDone: Bool
+    let leadingIcon: String
+    let title: String
+    let subtitle: String
+    let timeText: String
+    let toggle: () -> Void
+    let onTap: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Button(action: toggle) {
+                Image(systemName: isDone ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isDone ? .green : .secondary)
+                    .accessibilityLabel(isDone ? "Mark as not done" : "Mark as done")
+            }
+            .buttonStyle(.plain)
+
+            if !leadingIcon.isEmpty {
+                Text(leadingIcon)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.headline)
+                    .strikethrough(isDone, color: .secondary)
+                    .foregroundStyle(isDone ? .secondary : .primary)
+
+                if !subtitle.isEmpty {
+                    Text(subtitle)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+
+            Spacer()
+
+            Text(timeText)
+                .font(.headline)
+                .monospacedDigit()
+                .foregroundStyle(isDone ? .secondary : .primary)
+        }
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+        .onTapGesture { onTap() }
+    }
+}
+
+// MARK: - Appointment detail sheet
+private struct AppointmentDetailSheet: View {
+    let appointment: Appointment
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    HStack {
+                        Text(appointment.titleWithEmoji)
+                            .font(.headline)
+                        Spacer()
+                    }
+                    HStack {
+                        Image(systemName: "clock").foregroundStyle(.secondary)
+                        Text(timeAndDate(appointment.date))
+                    }
+                }
+                if let loc = appointment.location, !loc.isEmpty {
+                    Section("Location") {
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "mappin.and.ellipse").foregroundStyle(.secondary)
+                            Text(loc)
+                        }
+                    }
+                }
+                if let notes = appointment.notes, !notes.isEmpty {
+                    Section("Notes") { Text(notes) }
+                }
+            }
+            .navigationTitle("Appointment")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    private func timeAndDate(_ date: Date) -> String {
+        let df = DateFormatter()
+        df.dateStyle = .medium
+        df.timeStyle = .short
+        return df.string(from: date)
+    }
+}
