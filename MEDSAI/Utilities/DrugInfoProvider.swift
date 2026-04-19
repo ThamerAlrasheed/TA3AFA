@@ -19,7 +19,6 @@ extension UIImage {
 
 // MARK: - Your existing, app-facing model (kept the same)
 struct DrugPayload: Codable {
-...
     let title: String
     let strengths: [String]
     let dosageForms: [String]        // backend doesn’t send this yet; we fill [] for now

@@ -135,13 +135,15 @@ final class AppSettings: ObservableObject {
                 let role: String?
             }
 
-            let rows: [UserRow] = try await supabase.client
-                .from("users")
-                .select("breakfast_time, lunch_time, dinner_time, bedtime, wakeup_time, first_name, last_name, role")
-                .eq("id", value: uid.uuidString)
-                .limit(1)
-                .execute()
-                .value
+            let rows: [UserRow] = try await self.supabase.retry {
+                try await self.supabase.client
+                    .from("users")
+                    .select("breakfast_time, lunch_time, dinner_time, bedtime, wakeup_time, first_name, last_name, role")
+                    .eq("id", value: uid.uuidString)
+                    .limit(1)
+                    .execute()
+                    .value
+            }
 
             guard let row = rows.first else { return }
 
@@ -176,11 +178,13 @@ final class AppSettings: ObservableObject {
         ]
 
         do {
-            try await supabase.client
-                .from("users")
-                .update(data)
-                .eq("id", value: uid.uuidString)
-                .execute()
+            try await self.supabase.retry {
+                try await self.supabase.client
+                    .from("users")
+                    .update(data)
+                    .eq("id", value: uid.uuidString)
+                    .execute()
+            }
         } catch {
             print("⚠️ saveRoutineToSupabase failed:", error.localizedDescription)
         }

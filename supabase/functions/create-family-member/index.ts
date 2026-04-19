@@ -97,6 +97,8 @@ Deno.serve(async (req) => {
 
   const caregiverId = authData.user.id;
 
+  // Limit removed as per new requirements
+  /*
   const { count, error: countError } = await admin
     .from("caregiver_relations")
     .select("patient_id", { count: "exact", head: true })
@@ -109,6 +111,7 @@ Deno.serve(async (req) => {
   if ((count ?? 0) >= 2) {
     return json(409, { error: "A caregiver can manage up to 2 family members in this version." });
   }
+  */
 
   const patientId = crypto.randomUUID();
   const code = randomCode();

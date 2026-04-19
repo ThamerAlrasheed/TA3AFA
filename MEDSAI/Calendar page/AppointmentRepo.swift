@@ -23,6 +23,13 @@ final class AppointmentsRepo: ObservableObject {
     @Published private(set) var errorMessage: String? = nil
 
     private var supabase: SupabaseManager { .shared }
+    private var cancellables = Set<AnyCancellable>()
+
+    init() {
+        NotificationCenter.default.publisher(for: NSNotification.Name("SupabaseContextChanged"))
+            .sink { [weak self] _ in Task { await self?.fetchAppointments() } }
+            .store(in: &cancellables)
+    }
 
     var isSignedIn: Bool { supabase.currentUserID != nil }
 
@@ -34,17 +41,21 @@ final class AppointmentsRepo: ObservableObject {
     @MainActor
     func fetchAppointments() async {
         guard let uid = supabase.currentUserID else { return }
+        let uidString = uid.uuidString.lowercased()
         isLoading = true; errorMessage = nil
         do {
-            let rows: [AppointmentRow] = try await supabase.client
-                .from("appointments")
-                .select()
-                .eq("user_id", value: uid.uuidString)
-                .order("appointment_time")
-                .execute()
-                .value
+            let rows: [AppointmentRow] = try await self.supabase.retry {
+                try await self.supabase.client
+                    .from("appointments")
+                    .select()
+                    .eq("user_id", value: uidString)
+                    .order("appointment_time")
+                    .execute()
+                    .value
+            }
             self.items = rows.map { $0.toAppointment() }
         } catch {
+            print("⚠️ fetchAppointments failed for \(uidString):", error)
             errorMessage = error.localizedDescription
         }
         isLoading = false
@@ -60,10 +71,11 @@ final class AppointmentsRepo: ObservableObject {
             completion?(NSError(domain: "AppointmentsRepo", code: -1, userInfo: [NSLocalizedDescriptionKey: "Not signed in"]))
             return
         }
+        let uidString = uid.uuidString.lowercased()
         Task {
             do {
                 let row = AppointmentInsertPayload(
-                    user_id: uid.uuidString,
+                    user_id: uidString,
                     title: title,
                     doctor_name: type.rawValue,
                     appointment_time: ISO8601DateFormatter().string(from: date),
@@ -76,6 +88,7 @@ final class AppointmentsRepo: ObservableObject {
                 await fetchAppointments()
                 completion?(nil)
             } catch {
+                print("⚠️ add appointment failed:", error)
                 completion?(error)
             }
         }

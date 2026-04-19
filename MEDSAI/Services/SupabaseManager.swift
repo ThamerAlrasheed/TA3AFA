@@ -10,6 +10,9 @@ final class SupabaseManager {
         let dateOfBirth: String
         let allergies: [String]
         let conditions: [String]
+        let canPatientAddMeds: Bool
+        let notifyPatientMeds: Bool
+        let notifyPatientAppointments: Bool
 
         enum CodingKeys: String, CodingKey {
             case firstName = "first_name"
@@ -17,6 +20,9 @@ final class SupabaseManager {
             case dateOfBirth = "date_of_birth"
             case allergies
             case conditions
+            case canPatientAddMeds = "can_patient_add_meds"
+            case notifyPatientMeds = "notify_patient_meds"
+            case notifyPatientAppointments = "notify_patient_appointments"
         }
     }
 
@@ -75,9 +81,35 @@ final class SupabaseManager {
         return UUID(uuidString: str)
     }
 
-    /// Returns the active user ID: auth session first, then device-token patient fallback.
+    /// The patient ID currently being managed by a caregiver.
+    var activePatientID: UUID? {
+        get {
+            guard let str = UserDefaults.standard.string(forKey: "activePatientId") else { return nil }
+            return UUID(uuidString: str)
+        }
+        set {
+            if let newValue = newValue {
+                UserDefaults.standard.set(newValue.uuidString, forKey: "activePatientId")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "activePatientId")
+            }
+            NotificationCenter.default.post(name: NSNotification.Name("SupabaseContextChanged"), object: nil)
+        }
+    }
+
+    /// Returns the target user ID for data operations.
+    /// If a caregiver has an active patient selected, returns the patient's ID.
+    /// Otherwise returns the authenticated user's ID or the care-code patient fallback.
     var currentUserID: UUID? {
-        client.auth.currentSession?.user.id ?? patientUserID
+        if let activeID = activePatientID {
+            return activeID
+        }
+        return client.auth.currentSession?.user.id ?? patientUserID
+    }
+
+    /// The actual authenticated user's ID (ignoring impersonation).
+    var authenticatedUserID: UUID? {
+        client.auth.currentSession?.user.id
     }
 
     /// True if the user logged in via a care code (not email/password).
@@ -94,12 +126,75 @@ final class SupabaseManager {
         return id
     }
 
+    // MARK: - Retry Logic
+
+    /// Retries a given async operation if it fails with a transient error (like PGRST002).
+    func retry<T>(_ operation: @escaping () async throws -> T, maxRetries: Int = 3) async throws -> T {
+        var lastError: Error?
+        for attempt in 0..<maxRetries {
+            do {
+                return try await operation()
+            } catch {
+                lastError = error
+                let errorString = "\(error)"
+                
+                // PGRST002 specifically often includes "Could not query the database for the schema cache"
+                let isTransient = errorString.contains("PGRST002") || 
+                                 errorString.contains("schema cache") ||
+                                 errorString.contains("Retrying")
+
+                if isTransient && attempt < maxRetries - 1 {
+                    let delay = UInt64(pow(2.0, Double(attempt)) * 1_000_000_000) // Exponential backoff
+                    print("⚠️ Supabase transient error detected (attempt \(attempt + 1)). Retrying in \(Double(delay)/1_000_000_000)s...")
+                    try? await Task.sleep(nanoseconds: delay)
+                    continue
+                }
+                throw error
+            }
+        }
+        throw lastError ?? NSError(domain: "SupabaseManager", code: -1, userInfo: [NSLocalizedDescriptionKey: "Retry failed"])
+    }
+
+    // MARK: - Caregiver Actions
+
+    func transferPatient(id: UUID, toEmail: String) async throws {
+        struct TransferRequest: Encodable {
+            let patientId: UUID
+            let newCaregiverEmail: String
+        }
+
+        try await client.functions.invoke(
+            "transfer-patient",
+            options: .init(method: .post, body: TransferRequest(patientId: id, newCaregiverEmail: toEmail))
+        )
+    }
+
+    func updatePatientPermissions(
+        patientId: UUID,
+        canAddMeds: Bool,
+        notifyMeds: Bool,
+        notifyApps: Bool
+    ) async throws {
+        try await client
+            .from("caregiver_relations")
+            .update([
+                "can_patient_add_meds": canAddMeds,
+                "notify_patient_meds": notifyMeds,
+                "notify_patient_appointments": notifyApps
+            ])
+            .eq("patient_id", value: patientId.uuidString.lowercased())
+            .execute()
+    }
+
     func createFamilyMember(
         firstName: String,
         lastName: String,
         dateOfBirth: Date,
         allergies: [String],
-        conditions: [String]
+        conditions: [String],
+        canAddMeds: Bool,
+        notifyMeds: Bool,
+        notifyApps: Bool
     ) async throws -> CreateFamilyMemberResponse {
         guard client.auth.currentSession?.user.id != nil else {
             throw NSError(
@@ -117,7 +212,10 @@ final class SupabaseManager {
             lastName: lastName.trimmingCharacters(in: .whitespacesAndNewlines),
             dateOfBirth: formatter.string(from: dateOfBirth),
             allergies: allergies,
-            conditions: conditions
+            conditions: conditions,
+            canPatientAddMeds: canAddMeds,
+            notifyPatientMeds: notifyMeds,
+            notifyPatientAppointments: notifyApps
         )
 
         do {

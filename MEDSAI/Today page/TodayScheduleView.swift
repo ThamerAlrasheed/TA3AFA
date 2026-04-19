@@ -254,62 +254,73 @@ struct TodayScheduleView: View {
         let idsToCancel = buildAllNotificationIDsForToday()
         NotificationsManager.shared.cancel(ids: idsToCancel)
 
-        // Appointments: schedule one day before (at user's bedtime) + 30 minutes before (future only)
-        let appts = apptsRepo.appointments(on: today)
-        for appt in appts {
-            let t = appt.date
-            // 1) Day before at bedtime
-            if let bed = Calendar.current.date(bySettingHour: settings.bedtime.hour ?? 22,
-                                               minute: settings.bedtime.minute ?? 0,
-                                               second: 0,
-                                               of: Calendar.current.date(byAdding: .day, value: -1, to: t) ?? t) {
+        // Only schedule if notifications are allowed for this context
+        // If I am the caregiver acting as a patient, I always get them.
+        // If I am the patient, I must respect the caregiver's toggles.
+        let isImpersonating = settings.activePatientID != nil
+        let canNotifyAppts = isImpersonating || medsRepo.notifyAppointments
+        let canNotifyMeds = isImpersonating || medsRepo.notifyMeds
+
+        // Appointments
+        if canNotifyAppts {
+            let appts = apptsRepo.appointments(on: today)
+            for appt in appts {
+                let t = appt.date
+                // 1) Day before at bedtime
+                if let bed = Calendar.current.date(bySettingHour: settings.bedtime.hour ?? 22,
+                                                   minute: settings.bedtime.minute ?? 0,
+                                                   second: 0,
+                                                   of: Calendar.current.date(byAdding: .day, value: -1, to: t) ?? t) {
+                    NotificationsManager.shared.schedule(
+                        id: "APPT_1D_\(appt.id)",
+                        title: "Appointment tomorrow: \(appt.titleWithEmoji)",
+                        body: timeOnly(t) + (appt.location?.isEmpty == false ? " • \(appt.location!)" : ""),
+                        at: bed,
+                        categoryId: NotificationsManager.IDs.apptCategory,
+                        userInfo: ["appointmentId": appt.id]
+                    )
+                }
+
+                // 2) Thirty minutes before
+                let thirtyBefore = t.addingTimeInterval(-30 * 60)
                 NotificationsManager.shared.schedule(
-                    id: "APPT_1D_\(appt.id)",
-                    title: "Appointment tomorrow: \(appt.titleWithEmoji)",
+                    id: "APPT_30_\(appt.id)",
+                    title: "Your “\(appt.titleWithEmoji)” appointment is in 30 mins",
                     body: timeOnly(t) + (appt.location?.isEmpty == false ? " • \(appt.location!)" : ""),
-                    at: bed,
+                    at: thirtyBefore,
                     categoryId: NotificationsManager.IDs.apptCategory,
                     userInfo: ["appointmentId": appt.id]
                 )
             }
-
-            // 2) Thirty minutes before
-            let thirtyBefore = t.addingTimeInterval(-30 * 60)
-            NotificationsManager.shared.schedule(
-                id: "APPT_30_\(appt.id)",
-                title: "Your “\(appt.titleWithEmoji)” appointment is in 30 mins",
-                body: timeOnly(t) + (appt.location?.isEmpty == false ? " • \(appt.location!)" : ""),
-                at: thirtyBefore,
-                categoryId: NotificationsManager.IDs.apptCategory,
-                userInfo: ["appointmentId": appt.id]
-            )
         }
 
-        // Doses: at time + follow-up 15 minutes later (if not completed)
-        for (time, med) in todaysDoses {
-            let key = doseKey(time: time, medID: med.id)
-            let title = "Time to take \(med.name)"
-            let body = "\(med.dosage) • \(foodRuleLabel(med.foodRule))"
+        // Doses
+        if canNotifyMeds {
+            for (time, med) in todaysDoses {
+                let key = doseKey(time: time, medID: med.id)
+                let title = "Time to take \(med.name)"
+                let body = "\(med.dosage) • \(foodRuleLabel(med.foodRule))"
 
-            NotificationsManager.shared.schedule(
-                id: "DOSE_\(key)",
-                title: title,
-                body: body,
-                at: time,
-                categoryId: NotificationsManager.IDs.doseCategory,
-                userInfo: ["doseKey": key]
-            )
-
-            if !completedDoseKeys.contains(key) {
-                let fu = time.addingTimeInterval(15 * 60)
                 NotificationsManager.shared.schedule(
-                    id: "DOSE_FU_\(key)",
-                    title: "Did you take your med?",
-                    body: "\(med.name) — \(med.dosage)",
-                    at: fu,
+                    id: "DOSE_\(key)",
+                    title: title,
+                    body: body,
+                    at: time,
                     categoryId: NotificationsManager.IDs.doseCategory,
                     userInfo: ["doseKey": key]
                 )
+
+                if !completedDoseKeys.contains(key) {
+                    let fu = time.addingTimeInterval(15 * 60)
+                    NotificationsManager.shared.schedule(
+                        id: "DOSE_FU_\(key)",
+                        title: "Did you take your med?",
+                        body: "\(med.name) — \(med.dosage)",
+                        at: fu,
+                        categoryId: NotificationsManager.IDs.doseCategory,
+                        userInfo: ["doseKey": key]
+                    )
+                }
             }
         }
     }

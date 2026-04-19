@@ -6,6 +6,8 @@ import {
   safeParseJSON,
   cleanDrugData,
   DrugIntel,
+  getMedicationFromDB,
+  saveMedicationToDB,
 } from "../_shared/drug-utils.ts";
 
 Deno.serve(async (req) => {
@@ -30,6 +32,17 @@ Deno.serve(async (req) => {
       });
     }
 
+    // 1. Check Cache
+    const cached = await getMedicationFromDB(name);
+    if (cached) {
+      console.log(`Cache hit for: ${name}`);
+      return new Response(JSON.stringify(cached), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // 2. Fetch from OpenAI
     const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
     const chat = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -42,6 +55,9 @@ Deno.serve(async (req) => {
     const raw = chat.choices?.[0]?.message?.content ?? "";
     const data = safeParseJSON<Partial<DrugIntel>>(raw);
     const clean = cleanDrugData(data, name);
+
+    // 3. Save to Cache (Async)
+    EdgeRuntime.waitUntil(saveMedicationToDB(clean));
 
     return new Response(JSON.stringify(clean), {
       status: 200,

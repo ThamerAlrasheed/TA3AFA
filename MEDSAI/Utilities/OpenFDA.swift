@@ -33,10 +33,37 @@ enum OpenFDAService {
     // RxNorm (name normalization)
     private static let rxnormBase = "https://rxnav.nlm.nih.gov/REST"
 
-    // Tiny in-memory caches to keep things snappy
+    // Tiny in-memory caches to keep things snappy (PROTECTED BY LOCK)
     private static var rxcuiCache: [String:String] = [:]      // query.lowercased() -> rxcui
     private static var setIdCache: [String:String] = [:]      // rxcui -> setid
     private static var detailsCache: [String:MedDetails] = [:]// name.lowercased() -> details
+    
+    private static let cacheLock = NSLock()
+
+    private static func getRxcui(for key: String) -> String? {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        return rxcuiCache[key]
+    }
+    private static func setRxcui(_ val: String, for key: String) {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        rxcuiCache[key] = val
+    }
+    private static func getSetId(for key: String) -> String? {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        return setIdCache[key]
+    }
+    private static func setSetId(_ val: String, for key: String) {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        setIdCache[key] = val
+    }
+    private static func getDetails(for key: String) -> MedDetails? {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        return detailsCache[key]
+    }
+    private static func setDetails(_ val: MedDetails, for key: String) {
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        detailsCache[key] = val
+    }
 
     // MARK: Public: details (call sites UNCHANGED)
     static func fetchDetails(forName name: String) async throws -> MedDetails? {
@@ -44,20 +71,20 @@ enum OpenFDAService {
         guard !trimmed.isEmpty else { return nil }
 
         let key = trimmed.lowercased()
-        if let cached = detailsCache[key] { return cached }
+        if let cached = getDetails(for: key) { return cached }
 
         // Best-effort RxNorm→DailyMed prefetch in the background (do NOT block UI)
         Task.detached { await prefetchDailyMedKeying(by: trimmed) }
 
         // Content FIRST: openFDA brand → generic → loose text, with short timeouts
         if let doc = try await queryLabel(field: "openfda.brand_name", value: trimmed, timeout: 4) {
-            let md = mapOpenFDA(doc, displayName: trimmed); detailsCache[key] = md; return md
+            let md = mapOpenFDA(doc, displayName: trimmed); setDetails(md, for: key); return md
         }
         if let doc = try await queryLabel(field: "openfda.generic_name", value: trimmed, timeout: 4) {
-            let md = mapOpenFDA(doc, displayName: trimmed); detailsCache[key] = md; return md
+            let md = mapOpenFDA(doc, displayName: trimmed); setDetails(md, for: key); return md
         }
         if let doc = try await queryLabelContains(value: trimmed, timeout: 4) {
-            let md = mapOpenFDA(doc, displayName: trimmed); detailsCache[key] = md; return md
+            let md = mapOpenFDA(doc, displayName: trimmed); setDetails(md, for: key); return md
         }
 
         // Last resort — return a shell so the UI never hangs
@@ -65,7 +92,7 @@ enum OpenFDAService {
             title: normalizedDisplayName(from: trimmed),
             uses: "", dosage: "", interactions: "", warnings: "", sideEffects: "", ingredients: []
         )
-        detailsCache[key] = md
+        setDetails(md, for: key)
         return md
     }
 
@@ -89,9 +116,9 @@ private extension OpenFDAService {
         guard !trimmed.isEmpty else { return }
         do {
             if let rxcui = try await rxnormApproximateCUI(for: trimmed, timeout: 3) {
-                if setIdCache[rxcui] == nil,
+                if getSetId(for: rxcui) == nil,
                    let setid = try await dailymedPrimarySetID(for: rxcui, timeout: 3) {
-                    setIdCache[rxcui] = setid
+                    setSetId(setid, for: rxcui)
                     debugLog("DailyMed setid for \(trimmed): \(setid)")
                 }
             }
@@ -118,14 +145,14 @@ private extension OpenFDAService {
 private extension OpenFDAService {
     static func rxnormApproximateCUI(for query: String, timeout: TimeInterval) async throws -> String? {
         let key = query.lowercased()
-        if let cached = rxcuiCache[key] { return cached }
+        if let cached = getRxcui(for: key) { return cached }
 
         let term = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? query
         let url = URL(string: "\(rxnormBase)/approximateTerm.json?term=\(term)&maxEntries=1&option=1")!
         let data = try await fetchData(url: url, timeout: timeout)
         let decoded: RxApprox = try JSONDecoder().decode(RxApprox.self, from: data)
         let rxcui = decoded.approximateGroup?.candidate?.first?.rxcui
-        if let r = rxcui { rxcuiCache[key] = r }
+        if let r = rxcui { setRxcui(r, for: key) }
         return rxcui
     }
 

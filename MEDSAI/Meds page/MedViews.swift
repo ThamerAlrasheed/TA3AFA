@@ -1,8 +1,10 @@
 import SwiftUI
 import PhotosUI
+import Combine
+import Foundation
 
 // MARK: - Local model (Postgres-backed via Supabase)
-struct LocalMed: Identifiable, Hashable {
+struct LocalMed: Identifiable, Hashable, Equatable {
     let id: String
     var name: String
     var dosage: String
@@ -101,18 +103,22 @@ final class UserMedsRepo: ObservableObject {
         let is_active: Bool
     }
 
-    private struct MedicationInsertPayload: Encodable {
-        let id: String
-        let name: String
-        let food_rule: String
-    }
-
     @Published private(set) var meds: [LocalMed] = []
     @Published private(set) var isLoading = false
     @Published private(set) var errorMessage: String?
     @Published private(set) var isSignedIn = false
+    @Published private(set) var canAddMeds = true
+    @Published private(set) var notifyMeds = true
+    @Published private(set) var notifyAppointments = true
 
     private var supabase: SupabaseManager { .shared }
+    private var cancellables = Set<AnyCancellable>()
+
+    init() {
+        NotificationCenter.default.publisher(for: NSNotification.Name("SupabaseContextChanged"))
+            .sink { [weak self] _ in Task { await self?.fetchMeds() } }
+            .store(in: &cancellables)
+    }
 
     func start() {
         isSignedIn = supabase.currentUserID != nil
@@ -122,18 +128,54 @@ final class UserMedsRepo: ObservableObject {
 
     func fetchMeds() async {
         guard let uid = supabase.currentUserID else { return }
+        let uidString = uid.uuidString.lowercased()
         isLoading = true; errorMessage = nil
         do {
-            let rows: [LocalMed.DBRow] = try await supabase.client
-                .from("user_medications")
-                .select("*, medications(name, food_rule)")
-                .eq("user_id", value: uid.uuidString)
-                .eq("is_active", value: true)
-                .execute()
-                .value
+            // 1. Fetch Permission if needed (Only for patients or impersonated contexts)
+            if uid != supabase.authenticatedUserID || supabase.isPatientMode {
+                struct PermissionRow: Decodable {
+                    let can_patient_add_meds: Bool
+                    let notify_patient_meds: Bool
+                    let notify_patient_appointments: Bool
+                }
+                let perms: [PermissionRow] = try await self.supabase.retry {
+                    try await self.supabase.client
+                        .from("caregiver_relations")
+                        .select("can_patient_add_meds, notify_patient_meds, notify_patient_appointments")
+                        .eq("patient_id", value: uidString)
+                        .execute()
+                        .value
+                }
+                
+                if let first = perms.first {
+                    self.canAddMeds = first.can_patient_add_meds
+                    self.notifyMeds = first.notify_patient_meds
+                    self.notifyAppointments = first.notify_patient_appointments
+                } else {
+                    self.canAddMeds = true
+                    self.notifyMeds = true
+                    self.notifyAppointments = true
+                }
+            } else {
+                self.canAddMeds = true
+                self.notifyMeds = true
+                self.notifyAppointments = true
+            }
+
+            // 2. Fetch Meds
+            let rows: [LocalMed.DBRow] = try await self.supabase.retry {
+                try await self.supabase.client
+                    .from("user_medications")
+                    .select("*, medications(name, food_rule)")
+                    .eq("user_id", value: uidString)
+                    .eq("is_active", value: true)
+                    .execute()
+                    .value
+            }
             self.meds = rows.compactMap { LocalMed(row: $0) }
         } catch {
-            errorMessage = error.localizedDescription
+            print("⚠️ fetchMeds failed for \(uidString):", error)
+            errorMessage = "Unable to fetch medications (\(error.localizedDescription))."
         }
         isLoading = false
     }
@@ -142,16 +184,29 @@ final class UserMedsRepo: ObservableObject {
 
     func add(_ med: LocalMed) async {
         guard let uid = supabase.currentUserID else { return }
+        let uidString = uid.uuidString.lowercased()
         do {
-            // Ensure the medication exists in the global catalog first
-            let medId = try await ensureMedicationExists(name: med.name, foodRule: med.foodRule)
+            // 1. Ensure medication exists in global catalog and get its ID
+            struct MedIdRow: Decodable { let id: String }
+            let medLookup: [MedIdRow] = try await supabase.client
+                .from("medications")
+                .select("id")
+                .ilike("name", value: med.name)
+                .limit(1)
+                .execute()
+                .value
+            
+            guard let medId = medLookup.first?.id else {
+                errorMessage = "Medication '\(med.name)' not found in catalog. Please search for it first."
+                return
+            }
 
             let isoFmt = ISO8601DateFormatter()
             isoFmt.formatOptions = [.withFullDate]
 
             let row = UserMedicationUpsertPayload(
                 id: med.id,
-                user_id: uid.uuidString,
+                user_id: uidString,
                 medication_id: medId,
                 dosage: med.dosage,
                 frequency_per_day: med.frequencyPerDay,
@@ -169,6 +224,7 @@ final class UserMedsRepo: ObservableObject {
 
             await fetchMeds()
         } catch {
+            print("⚠️ add med failed:", error)
             errorMessage = error.localizedDescription
         }
     }
@@ -199,38 +255,6 @@ final class UserMedsRepo: ObservableObject {
         } catch {
             errorMessage = error.localizedDescription
         }
-    }
-
-    // MARK: - Helpers
-
-    /// Ensures a medication exists in the global `medications` table and returns its UUID.
-    private func ensureMedicationExists(name: String, foodRule: FoodRule) async throws -> String {
-        struct MedRow: Decodable { let id: String }
-
-        // Try to find existing
-        let existing: [MedRow] = try await supabase.client
-            .from("medications")
-            .select("id")
-            .eq("name", value: name)
-            .execute()
-            .value
-
-        if let first = existing.first { return first.id }
-
-        // Insert new
-        let newId = UUID().uuidString
-        try await supabase.client
-            .from("medications")
-            .insert(
-                MedicationInsertPayload(
-                    id: newId,
-                    name: name,
-                    food_rule: foodRule.rawValue
-                )
-            )
-            .execute()
-
-        return newId
     }
 
     private func normalizedNotes(_ notes: String?) -> String? {
@@ -284,7 +308,7 @@ struct MedListView: View {
                         }
 
                         ForEach(repo.meds, id: \.id) { med in
-                            MedRow(med: med) {
+                            MedRowView(med: med) {
                                 editMed = med
                             } onInfo: {
                                 infoMed = med
@@ -298,7 +322,7 @@ struct MedListView: View {
             }
             .navigationTitle("Meds")
             .toolbar {
-                if settings.role != .patient {
+                if repo.canAddMeds || settings.role == .caregiver {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
                             Button { showingAdd = true } label: {
@@ -395,7 +419,7 @@ struct MedListView: View {
 }
 
 // MARK: - Row extracted to avoid complex type-checking
-private struct MedRow: View {
+private struct MedRowView: View {
     @EnvironmentObject var settings: AppSettings
     let med: LocalMed
     let onEdit: () -> Void
@@ -577,7 +601,7 @@ struct AddLocalMedView: View {
             }
         }()
 
-        var med = LocalMed(
+        let med = LocalMed(
             name: name.trimmingCharacters(in: .whitespaces),
             dosage: dosageString,
             frequencyPerDay: freq,
@@ -588,17 +612,6 @@ struct AddLocalMedView: View {
             ingredients: nil,
             minIntervalHours: parsedMinInterval
         )
-
-        // Upsert catalog in background (best effort)
-        Task.detached {
-            do {
-                let payload = try await DrugInfo.fetchDetails(name: med.name)
-                let entry = try await MedCatalogRepo.shared.upsert(from: payload, searchedName: med.name, imageURL: nil)
-                med.kbKey = entry.key
-            } catch {
-                print("⚠️ Catalog upsert from Add failed:", error.localizedDescription)
-            }
-        }
 
         onSave(med)
         dismiss()
@@ -648,8 +661,6 @@ struct AddLocalMedView: View {
             if let ih = parsedMinInterval { chips.append("~every \(ih)h") }
             infoChips = chips
 
-            // Pre-cache in catalog
-            Task.detached { _ = try? await MedCatalogRepo.shared.upsert(from: payload, searchedName: medName, imageURL: nil) }
         } catch {
             infoChips = ["Couldn’t fetch info"]
         }
@@ -804,22 +815,16 @@ struct MedDetailView: View {
         .task { await load() }
     }
 
-    private func normalizeKey(_ raw: String) -> String {
-        raw.lowercased()
-            .replacingOccurrences(of: #"[^a-z0-9]+"#, with: "_", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
-    }
-
     private func loadFromCatalog(nameOrKey: String) async -> DrugPayload? {
-        // Try to load from the Postgres medications table
         struct CatalogRow: Decodable {
             let name: String
-            let how_to_use: String?
-            let side_effects: [String]?
-            let contraindications: [String]?
             let food_rule: String?
             let min_interval_hours: Int?
-            let active_ingredients: [String]?
+            let interactions_to_avoid: [String]?
+            let common_side_effects: [String]?
+            let how_to_take: [String]?
+            let what_for: [String]?
+            let strengths: [String]?
         }
         do {
             let rows: [CatalogRow] = try await SupabaseManager.shared.client
@@ -832,16 +837,16 @@ struct MedDetailView: View {
             guard let row = rows.first else { return nil }
             return DrugPayload(
                 title: row.name,
-                strengths: [],
+                strengths: row.strengths ?? [],
                 dosageForms: [],
                 foodRule: row.food_rule,
                 minIntervalHours: row.min_interval_hours,
-                ingredients: row.active_ingredients ?? [],
-                indications: [],
-                howToTake: row.how_to_use.map { [$0] } ?? [],
-                commonSideEffects: row.side_effects ?? [],
+                ingredients: [],
+                indications: row.what_for ?? [],
+                howToTake: row.how_to_take ?? [],
+                commonSideEffects: row.common_side_effects ?? [],
                 importantWarnings: [],
-                interactionsToAvoid: row.contraindications ?? [],
+                interactionsToAvoid: row.interactions_to_avoid ?? [],
                 references: nil,
                 kbKey: nil
             )
@@ -863,7 +868,6 @@ struct MedDetailView: View {
         do {
             let p = try await DrugInfo.fetchDetails(name: medName)
             self.payload = p
-            Task.detached { _ = try? await MedCatalogRepo.shared.upsert(from: p, searchedName: medName, imageURL: nil) }
         } catch {
             self.payload = nil
             self.errorText = "We couldn’t find details for “\(medName)”."
@@ -1036,4 +1040,3 @@ struct UploadPhotoView: View {
         }
     }
 }
-

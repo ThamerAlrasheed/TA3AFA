@@ -1,4 +1,5 @@
 import SwiftUI
+import Foundation
 
 struct SearchView: View {
     @State private var query: String = ""
@@ -151,15 +152,6 @@ struct SearchView: View {
         do {
             let payload = try await DrugInfo.fetchDetails(name: term)
             result = payload
-
-            // 👇 Save to global catalog
-            Task.detached {
-                do {
-                    _ = try await MedCatalogRepo.shared.upsert(from: payload, searchedName: term, imageURL: nil)
-                } catch {
-                    print("⚠️ MedCatalog upsert failed:", error.localizedDescription)
-                }
-            }
         } catch {
             errorText = "Couldn’t fetch drug info. \(error.localizedDescription)"
             result = nil

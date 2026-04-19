@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 
 @MainActor
 final class SearchHistoryRepo: ObservableObject {
@@ -11,6 +12,13 @@ final class SearchHistoryRepo: ObservableObject {
     @Published private(set) var errorMessage: String?
 
     private var supabase: SupabaseManager { .shared }
+    private var cancellables = Set<AnyCancellable>()
+
+    init() {
+        NotificationCenter.default.publisher(for: NSNotification.Name("SupabaseContextChanged"))
+            .sink { [weak self] _ in self?.start() }
+            .store(in: &cancellables)
+    }
 
     /// Fetch recent searches for the signed-in user (latest first).
     func start(limit: Int = 10) {
@@ -20,12 +28,13 @@ final class SearchHistoryRepo: ObservableObject {
 
     private func fetchRecent(limit: Int) async {
         guard let uid = supabase.currentUserID else { return }
+        let uidString = uid.uuidString.lowercased()
         do {
             struct Row: Decodable { let search_query: String }
             let rows: [Row] = try await supabase.client
                 .from("search_history")
                 .select("search_query")
-                .eq("user_id", value: uid.uuidString)
+                .eq("user_id", value: uidString)
                 .order("created_at", ascending: false)
                 .limit(limit)
                 .execute()
@@ -41,6 +50,7 @@ final class SearchHistoryRepo: ObservableObject {
             }
             self.recent = out
         } catch {
+            print("⚠️ fetchRecent history failed for \(uidString):", error)
             errorMessage = error.localizedDescription
         }
     }
@@ -49,17 +59,19 @@ final class SearchHistoryRepo: ObservableObject {
     func add(query: String) async {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, let uid = supabase.currentUserID else { return }
+        let uidString = uid.uuidString.lowercased()
         do {
             try await supabase.client
                 .from("search_history")
                 .insert(
                     SearchHistoryInsertPayload(
-                        user_id: uid.uuidString,
+                        user_id: uidString,
                         search_query: q
                     )
                 )
                 .execute()
         } catch {
+            print("⚠️ add search history failed:", error)
             errorMessage = error.localizedDescription
         }
     }

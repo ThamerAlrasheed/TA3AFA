@@ -1,3 +1,5 @@
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.1";
+
 export type DrugIntel = {
   title: string;
   strengths: string[];
@@ -58,4 +60,53 @@ export function cleanDrugData(data: Partial<DrugIntel>, fallbackName: string): D
     how_to_take: Array.isArray(data.how_to_take) ? data.how_to_take.map(String) : [],
     what_for: Array.isArray(data.what_for) ? data.what_for.map(String) : [],
   };
+}
+
+// Caching Helpers
+export async function getMedicationFromDB(name: string): Promise<DrugIntel | null> {
+  const supabase = createClient(
+    Deno.env.get("SUPABASE_URL") ?? "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+  );
+
+  const { data, error } = await supabase
+    .from("medications")
+    .select("*")
+    .ilike("name", name)
+    .limit(1)
+    .single();
+
+  if (error || !data) return null;
+
+  return {
+    title: data.name,
+    strengths: data.strengths ?? [],
+    food_rule: data.food_rule as DrugIntel["food_rule"],
+    min_interval_hours: data.min_interval_hours,
+    interactions_to_avoid: data.interactions_to_avoid ?? [],
+    common_side_effects: data.common_side_effects ?? [],
+    how_to_take: data.how_to_take ?? [],
+    what_for: data.what_for ?? [],
+  };
+}
+
+export async function saveMedicationToDB(data: DrugIntel): Promise<void> {
+  const supabase = createClient(
+    Deno.env.get("SUPABASE_URL") ?? "",
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
+  );
+
+  await supabase
+    .from("medications")
+    .upsert({
+      name: data.title,
+      strengths: data.strengths,
+      food_rule: data.food_rule,
+      min_interval_hours: data.min_interval_hours,
+      interactions_to_avoid: data.interactions_to_avoid,
+      common_side_effects: data.common_side_effects,
+      how_to_take: data.how_to_take,
+      what_for: data.what_for,
+    }, { onConflict: "name" })
+    .execute();
 }

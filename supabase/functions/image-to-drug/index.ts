@@ -6,6 +6,7 @@ import {
   safeParseJSON,
   cleanDrugData,
   DrugIntel,
+  saveMedicationToDB,
 } from "../_shared/drug-utils.ts";
 
 Deno.serve(async (req) => {
@@ -53,6 +54,9 @@ Deno.serve(async (req) => {
     const raw = chat.choices?.[0]?.message?.content ?? "";
     const data = safeParseJSON<Partial<DrugIntel>>(raw);
     const clean = cleanDrugData(data, "Unknown Medication");
+
+    // Save to Cache (Async)
+    EdgeRuntime.waitUntil(saveMedicationToDB(clean));
 
     return new Response(JSON.stringify(clean), {
       status: 200,
