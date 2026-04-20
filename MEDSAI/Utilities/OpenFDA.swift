@@ -286,18 +286,8 @@ private extension OpenFDAService {
 private struct DMSetList: Decodable {
     struct Item: Decodable {
         let setid: String?
-        let spl_version: String?
-        let title: String?
-        let published_date: String?
     }
-    let metadata: DMMetadata?
     let data: [Item]
-}
-private struct DMMetadata: Decodable {
-    let total_elements: String?
-    let elements_per_page: String?
-    let total_pages: String?
-    let current_page: String?
 }
 
 // openFDA label (subset)

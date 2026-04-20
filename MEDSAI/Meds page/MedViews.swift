@@ -188,7 +188,7 @@ final class UserMedsRepo: ObservableObject {
         do {
             // 1. Ensure medication exists in global catalog and get its ID
             struct MedIdRow: Decodable { let id: String }
-            let medLookup: [MedIdRow] = try await supabase.client
+            var medLookup: [MedIdRow] = try await supabase.client
                 .from("medications")
                 .select("id")
                 .ilike("name", value: med.name)
@@ -196,8 +196,47 @@ final class UserMedsRepo: ObservableObject {
                 .execute()
                 .value
             
-            guard let medId = medLookup.first?.id else {
-                errorMessage = "Medication '\(med.name)' not found in catalog. Please search for it first."
+            var medId: String? = medLookup.first?.id
+
+            // 1.1 If not found, try to fetch info and upsert to catalog
+            if medId == nil {
+                print("Medication '\(med.name)' not in catalog. Fetching and upserting...")
+                do {
+                    let payload = try await DrugInfo.fetchDetails(name: med.name)
+                    _ = try? await MedCatalogRepo.shared.upsert(from: payload, searchedName: med.name)
+                    
+                    // Re-lookup ID after upsert — try original name first
+                    medLookup = try await supabase.client
+                        .from("medications")
+                        .select("id")
+                        .ilike("name", value: med.name)
+                        .limit(1)
+                        .execute()
+                        .value
+                    medId = medLookup.first?.id
+                    
+                    // If still nil, the catalog stored it under the generic/payload title
+                    // (e.g. user typed "Zyrtec" but openFDA returned "Cetirizine Hydrochloride")
+                    if medId == nil, !payload.title.isEmpty,
+                       payload.title.caseInsensitiveCompare(med.name) != .orderedSame {
+                        medLookup = try await supabase.client
+                            .from("medications")
+                            .select("id")
+                            .ilike("name", value: payload.title)
+                            .limit(1)
+                            .execute()
+                            .value
+                        medId = medLookup.first?.id
+                    }
+                } catch {
+                    print("⚠️ Failed to fetch details for '\(med.name)':", error)
+                    errorMessage = "Could not fetch info for '\(med.name)'. \(error.localizedDescription)"
+                    return
+                }
+            }
+            
+            guard let finalMedId = medId else {
+                errorMessage = "Medication '\(med.name)' not found in catalog and could not be fetched. Please check the spelling."
                 return
             }
 
@@ -207,7 +246,7 @@ final class UserMedsRepo: ObservableObject {
             let row = UserMedicationUpsertPayload(
                 id: med.id,
                 user_id: uidString,
-                medication_id: medId,
+                medication_id: finalMedId,
                 dosage: med.dosage,
                 frequency_per_day: med.frequencyPerDay,
                 frequency_hours: med.minIntervalHours,
@@ -823,7 +862,6 @@ struct MedDetailView: View {
             let interactions_to_avoid: [String]?
             let common_side_effects: [String]?
             let how_to_take: [String]?
-            let what_for: [String]?
             let strengths: [String]?
         }
         do {
@@ -842,7 +880,7 @@ struct MedDetailView: View {
                 foodRule: row.food_rule,
                 minIntervalHours: row.min_interval_hours,
                 ingredients: [],
-                indications: row.what_for ?? [],
+                indications: [],
                 howToTake: row.how_to_take ?? [],
                 commonSideEffects: row.common_side_effects ?? [],
                 importantWarnings: [],
@@ -1003,7 +1041,7 @@ struct UploadPhotoView: View {
                     }
                     .disabled(isAnalyzing)
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .topBarTrailing) {   
                     Button("Analyze") {
                         analyze()
                     }

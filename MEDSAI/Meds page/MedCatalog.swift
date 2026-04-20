@@ -27,9 +27,12 @@ struct MedCatalogEntry: Codable, Identifiable {
 final class MedCatalogRepo {
     private struct MedicationInsertPayload: Encodable {
         let name: String
-        let how_to_use: String?
+        let how_to_take: [String]?
         let food_rule: String
         let min_interval_hours: Int?
+        let strengths: [String]?
+        let common_side_effects: [String]?
+        let interactions_to_avoid: [String]?
     }
 
     static let shared = MedCatalogRepo()
@@ -49,12 +52,12 @@ final class MedCatalogRepo {
         struct Row: Decodable {
             let id: String
             let name: String
-            let how_to_use: String?
-            let side_effects: [String]?
-            let contraindications: [String]?
+            let how_to_take: [String]?
+            let common_side_effects: [String]?
+            let interactions_to_avoid: [String]?
             let food_rule: String?
             let min_interval_hours: Int?
-            let active_ingredients: [String]?
+            let strengths: [String]?
         }
 
         let rows: [Row] = try await supabase.client
@@ -69,16 +72,16 @@ final class MedCatalogRepo {
 
         let payload = DrugPayload(
             title: row.name,
-            strengths: [],
+            strengths: row.strengths ?? [],
             dosageForms: [],
             foodRule: row.food_rule,
             minIntervalHours: row.min_interval_hours,
-            ingredients: row.active_ingredients ?? [],
+            ingredients: [],
             indications: [],
-            howToTake: row.how_to_use.map { [$0] } ?? [],
-            commonSideEffects: row.side_effects ?? [],
+            howToTake: row.how_to_take ?? [],
+            commonSideEffects: row.common_side_effects ?? [],
             importantWarnings: [],
-            interactionsToAvoid: row.contraindications ?? [],
+            interactionsToAvoid: row.interactions_to_avoid ?? [],
             references: nil,
             kbKey: nil
         )
@@ -105,19 +108,17 @@ final class MedCatalogRepo {
             .value
 
         if existing.isEmpty {
-            let instructions = payload.howToTake
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                .filter { !$0.isEmpty }
-                .joined(separator: "\n")
-
-            try await supabase.client
+            _ = try? await supabase.client
                 .from("medications")
                 .insert(
                     MedicationInsertPayload(
                         name: display,
-                        how_to_use: instructions.isEmpty ? nil : instructions,
+                        how_to_take: payload.howToTake,
                         food_rule: payload.foodRule ?? "none",
-                        min_interval_hours: payload.minIntervalHours
+                        min_interval_hours: payload.minIntervalHours,
+                        strengths: payload.strengths,
+                        common_side_effects: payload.commonSideEffects,
+                        interactions_to_avoid: payload.interactionsToAvoid
                     )
                 )
                 .execute()
