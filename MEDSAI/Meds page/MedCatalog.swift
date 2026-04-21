@@ -88,7 +88,7 @@ final class MedCatalogRepo {
             references: nil,
             kbKey: nil,
             rxcui: row.rxcui,
-            id: nil
+            id: UUID(uuidString: row.id)
         )
 
         return MedCatalogEntry(
@@ -108,13 +108,16 @@ final class MedCatalogRepo {
         let existing: [ExistingRow] = try await supabase.client
             .from("medications")
             .select("id, name")
-            .ilike("name", value: display)
+            .ilike("name", pattern: display)
             .limit(1)
             .execute()
             .value
 
+        var finalId: String? = existing.first?.id
+
         if existing.isEmpty {
-            _ = try? await supabase.client
+            struct InsertResult: Decodable { let id: String }
+            let inserted: [InsertResult] = try await supabase.client
                 .from("medications")
                 .insert(
                     MedicationInsertPayload(
@@ -129,13 +132,37 @@ final class MedCatalogRepo {
                         rxcui: payload.rxcui
                     )
                 )
+                .select("id")
                 .execute()
+                .value
+            finalId = inserted.first?.id
+        }
+
+        var updatedPayload = payload
+        if let fid = finalId {
+            updatedPayload = DrugPayload(
+                title: payload.title,
+                strengths: payload.strengths,
+                dosageForms: payload.dosageForms,
+                foodRule: payload.foodRule,
+                minIntervalHours: payload.minIntervalHours,
+                ingredients: payload.ingredients,
+                indications: payload.indications,
+                howToTake: payload.howToTake,
+                commonSideEffects: payload.commonSideEffects,
+                importantWarnings: payload.importantWarnings,
+                interactionsToAvoid: payload.interactionsToAvoid,
+                references: payload.references,
+                kbKey: payload.kbKey,
+                rxcui: payload.rxcui,
+                id: UUID(uuidString: fid)
+            )
         }
 
         return MedCatalogEntry(
             key: normalizeKey(display),
             name: display,
-            payload: payload
+            payload: updatedPayload
         )
     }
 }

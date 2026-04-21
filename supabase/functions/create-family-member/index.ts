@@ -6,6 +6,9 @@ type CreateFamilyMemberRequest = {
   date_of_birth?: string;
   allergies?: unknown;
   conditions?: unknown;
+  can_patient_add_meds?: boolean;
+  notify_patient_meds?: boolean;
+  notify_patient_appointments?: boolean;
 };
 
 const corsHeaders = {
@@ -90,6 +93,10 @@ Deno.serve(async (req) => {
   const dateOfBirth = (payload.date_of_birth ?? "").trim();
   const allergies = sanitizeStringArray(payload.allergies);
   const conditions = sanitizeStringArray(payload.conditions);
+  
+  const canPatientAddMeds = payload.can_patient_add_meds ?? true;
+  const notifyPatientMeds = payload.notify_patient_meds ?? true;
+  const notifyPatientAppointments = payload.notify_patient_appointments ?? true;
 
   if (!firstName || !lastName || !dateOfBirth) {
     return json(400, { error: "First name, last name, and date of birth are required." });
@@ -134,6 +141,10 @@ Deno.serve(async (req) => {
   const { error: relationError } = await admin.from("caregiver_relations").insert({
     caregiver_id: caregiverId,
     patient_id: patientId,
+    status: "pending",
+    can_patient_add_meds: canPatientAddMeds,
+    notify_patient_meds: notifyPatientMeds,
+    notify_patient_appointments: notifyPatientAppointments,
   });
 
   if (relationError) {

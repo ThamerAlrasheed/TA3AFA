@@ -297,7 +297,7 @@ struct MedEssentials {
 
 enum MedSummarizer {
 
-    static func bullets(from raw: String, max: Int = 5) -> [String] {
+    static func bullets(from raw: String, max: Int = 4) -> [String] {
         var text = raw
             .replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
             .replacingOccurrences(of: "\r", with: "\n")
@@ -324,21 +324,18 @@ enum MedSummarizer {
         for var s in candidates {
             if s.hasPrefix("•") { s = s.dropFirst().trimmingCharacters(in: .whitespaces) }
 
+            // Skip short or numerical-only lines
             if s.range(of: #"^\(?\d+(?:\s*,\s*\d+)*\)?$"#, options: .regularExpression) != nil { continue }
             if s.range(of: #"^\d+\s*[–-]\s*\d+$"#, options: .regularExpression) != nil { continue }
+            if s.count < 10 { continue }
 
-            s = s.replacingOccurrences(of: #"^\(?\d+(?:,\s*\d+)*\)?\s*"#,
-                                       with: "",
-                                       options: .regularExpression)
-
-            if s.count < 8 { continue }
-
-            if s.count > 160 {
-                let cut = s.index(s.startIndex, offsetBy: 140)
+            // Aggressive truncation for conciseness
+            if s.count > 110 {
+                let cut = s.index(s.startIndex, offsetBy: 100)
                 if let space = s[cut...].firstIndex(of: " ") {
-                    s = String(s[..<space])
+                    s = String(s[..<space]) + "..."
                 } else {
-                    s = String(s.prefix(150))
+                    s = String(s.prefix(105)) + "..."
                 }
             }
             lines.append(s)
@@ -347,9 +344,7 @@ enum MedSummarizer {
         var out: [String] = []
         func similar(_ a: String, _ b: String) -> Bool {
             let ax = a.lowercased(), bx = b.lowercased()
-            if ax == bx { return true }
-            if ax.contains(bx) || bx.contains(ax) { return true }
-            return false
+            return ax == bx || ax.contains(bx) || bx.contains(ax)
         }
         for s in lines {
             if out.contains(where: { similar($0, s) }) { continue }

@@ -77,6 +77,14 @@ enum DrugInfo: DrugInfoProvider {
             default: return nil
             }
         }()
+
+        // Helper to ensure lists are summarized and concise
+        func summarize(_ list: [String]?) -> [String] {
+            guard let list = list, !list.isEmpty else { return [] }
+            let combined = list.joined(separator: "\n")
+            return MedSummarizer.bullets(from: combined, max: 4)
+        }
+
         return DrugPayload(
             title: (b.title?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? fallbackTitle,
             strengths: b.strengths ?? [],
@@ -84,11 +92,11 @@ enum DrugInfo: DrugInfoProvider {
             foodRule: mappedFood,
             minIntervalHours: b.min_interval_hours,
             ingredients: [],
-            indications: b.what_for ?? [],
-            howToTake: b.how_to_take ?? [],
-            commonSideEffects: b.common_side_effects ?? [],
+            indications: summarize(b.what_for),
+            howToTake: summarize(b.how_to_take),
+            commonSideEffects: summarize(b.common_side_effects),
             importantWarnings: [],
-            interactionsToAvoid: b.interactions_to_avoid ?? [],
+            interactionsToAvoid: summarize(b.interactions_to_avoid),
             references: nil,
             kbKey: nil,
             rxcui: b.rxcui,
@@ -98,13 +106,10 @@ enum DrugInfo: DrugInfoProvider {
 
     /// Build DrugPayload from openFDA MedDetails + strengths (fallback when backend fails)
     private static func payloadFromOpenFDA(medName: String, details: MedDetails, strengths: [String]) -> DrugPayload {
-        func toBullets(_ s: String) -> [String] {
-            let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !t.isEmpty else { return [] }
-            let paras = t.components(separatedBy: "\n\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-            if paras.isEmpty { return [t] }
-            return paras
+        func summarize(_ s: String) -> [String] {
+            MedSummarizer.bullets(from: s, max: 4)
         }
+
         return DrugPayload(
             title: details.title.isEmpty ? medName : details.title,
             strengths: strengths.isEmpty ? (details.dosage.isEmpty ? [] : [details.dosage]) : strengths,
@@ -112,11 +117,11 @@ enum DrugInfo: DrugInfoProvider {
             foodRule: nil,
             minIntervalHours: nil,
             ingredients: details.ingredients,
-            indications: toBullets(details.uses),
-            howToTake: toBullets(details.dosage),
-            commonSideEffects: toBullets(details.sideEffects),
-            importantWarnings: toBullets(details.warnings),
-            interactionsToAvoid: toBullets(details.interactions),
+            indications: summarize(details.uses),
+            howToTake: summarize(details.dosage),
+            commonSideEffects: summarize(details.sideEffects),
+            importantWarnings: summarize(details.warnings),
+            interactionsToAvoid: summarize(details.interactions),
             references: nil,
             kbKey: nil,
             rxcui: nil,
@@ -137,7 +142,10 @@ enum DrugInfo: DrugInfoProvider {
         do {
             let backend: BackendPayload = try await SupabaseManager.shared.client.functions.invoke(
                 "drug-intel",
-                options: .init(body: ["name": trimmed, "lang": lang])
+                options: .init(
+                    headers: ["apikey": SupabaseManager.shared.supabaseKey],
+                    body: ["name": trimmed, "lang": lang]
+                )
             )
             return mapToAppModel(backend, fallbackTitle: trimmed)
         } catch {
@@ -167,7 +175,10 @@ enum DrugInfo: DrugInfoProvider {
         do {
             let response: InteractionResponse = try await SupabaseManager.shared.client.functions.invoke(
                 "check-interactions",
-                options: .init(body: InteractionRequest(rxcuis: rxcuis, lang: lang))
+                options: .init(
+                    headers: ["apikey": SupabaseManager.shared.supabaseKey],
+                    body: InteractionRequest(rxcuis: rxcuis, lang: lang)
+                )
             )
             return response.interactions
         } catch {
@@ -187,7 +198,10 @@ enum DrugInfo: DrugInfoProvider {
         do {
             let backend: BackendPayload = try await SupabaseManager.shared.client.functions.invoke(
                 "image-to-drug",
-                options: .init(body: ["image": base64])
+                options: .init(
+                    headers: ["apikey": SupabaseManager.shared.supabaseKey],
+                    body: ["image": base64]
+                )
             )
             return mapToAppModel(backend, fallbackTitle: "Medication")
         } catch {

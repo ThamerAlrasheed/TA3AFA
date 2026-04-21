@@ -77,6 +77,7 @@ struct SearchView: View {
                                 if !r.strengths.isEmpty {
                                     SectionHeader("Strengths")
                                     WrapChips(items: r.strengths)
+                                        .padding(.horizontal)
                                 }
 
                                 if r.foodRule != nil || r.minIntervalHours != nil {
@@ -89,23 +90,23 @@ struct SearchView: View {
                                 }
 
                                 if !r.howToTake.isEmpty {
-                                    SectionHeader("How to take")
-                                    BulletList(r.howToTake)
+                                    InfoSection(title: "How to take", bullets: r.howToTake)
+                                        .padding(.horizontal)
                                 }
 
                                 if !r.indications.isEmpty {
-                                    SectionHeader("What it’s for")
-                                    BulletList(r.indications)
+                                    InfoSection(title: "What it’s for", bullets: r.indications)
+                                        .padding(.horizontal)
                                 }
 
                                 if !r.interactionsToAvoid.isEmpty {
-                                    SectionHeader("Don’t mix with")
-                                    BulletList(r.interactionsToAvoid)
+                                    InfoSection(title: "Don’t mix with", bullets: r.interactionsToAvoid)
+                                        .padding(.horizontal)
                                 }
 
                                 if !r.commonSideEffects.isEmpty {
-                                    SectionHeader("Common side effects")
-                                    BulletList(r.commonSideEffects)
+                                    InfoSection(title: "Common side effects", bullets: r.commonSideEffects)
+                                        .padding(.horizontal)
                                 }
                             } else if !isLoading {
                                 ContentUnavailableView(
@@ -157,64 +158,4 @@ private struct SectionHeader: View {
     let title: String
     init(_ title: String) { self.title = title }
     var body: some View { Text(title).font(.headline).padding(.horizontal) }
-}
-
-private struct BulletList: View {
-    let items: [String]
-    init(_ items: [String]) { self.items = items }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ForEach(items.prefix(12), id: \.self) { t in
-                HStack(alignment: .top, spacing: 8) { Text("•").bold(); Text(t) }
-            }
-        }
-        .padding(.horizontal)
-    }
-}
-
-private struct WrapChips: View {
-    let items: [String]
-    var body: some View {
-        FlexibleWrap(items: items) { text in
-            Text(text)
-                .font(.footnote)
-                .padding(.horizontal, 10).padding(.vertical, 6)
-                .background(Color(.secondarySystemBackground))
-                .clipShape(Capsule())
-        }
-        .padding(.horizontal)
-    }
-}
-
-private struct FlexibleWrap<Content: View>: View {
-    let items: [String]; let content: (String) -> Content
-    @State private var totalHeight = CGFloat.zero
-    var body: some View {
-        VStack { GeometryReader { geo in self.generateContent(in: geo) } }
-            .frame(height: totalHeight)
-    }
-    private func generateContent(in g: GeometryProxy) -> some View {
-        var width = CGFloat.zero; var height = CGFloat.zero
-        return ZStack(alignment: .topLeading) {
-            ForEach(items, id: \.self) { item in
-                content(item)
-                    .alignmentGuide(.leading) { d in
-                        if (abs(width - d.width) > g.size.width) { width = 0; height -= d.height }
-                        let res = width; if item == items.last! { width = 0 } else { width -= d.width }; return res
-                    }
-                    .alignmentGuide(.top) { _ in let res = height; if item == items.last! { height = 0 }; return res }
-            }
-        }.background(viewHeightReader($totalHeight))
-    }
-    private func viewHeightReader(_ binding: Binding<CGFloat>) -> some View {
-        GeometryReader { geo -> Color in
-            let height = geo.size.height
-            DispatchQueue.main.async {
-                if binding.wrappedValue != height {
-                    binding.wrappedValue = height
-                }
-            }
-            return .clear
-        }
-    }
 }

@@ -59,7 +59,7 @@ final class SupabaseManager {
     static let shared = SupabaseManager()
 
     private let supabaseURL = URL(string: "https://svucjnbwlcsaiaurdmab.supabase.co")!
-    private let supabaseKey = "sb_publishable_jEQs-Uecl0vce5rwqHq5zA_AW68TTrI"
+    let supabaseKey = "sb_publishable_jEQs-Uecl0vce5rwqHq5zA_AW68TTrI"
 
     let client: SupabaseClient
 

@@ -83,6 +83,12 @@ Deno.serve(async (request) => {
     return jsonResponse({ error: updateError.message }, 500);
   }
 
+  // Also update the caregiver relation status to active
+  await admin
+    .from("caregiver_relations")
+    .update({ status: "active" })
+    .eq("patient_id", codeRow.patient_id);
+
   return jsonResponse(
     {
       patient_id: codeRow.patient_id,

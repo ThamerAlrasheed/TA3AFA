@@ -55,8 +55,8 @@ Deno.serve(async (req) => {
     const data = safeParseJSON<Partial<DrugIntel>>(raw);
     const clean = cleanDrugData(data, "Unknown Medication");
 
-    // Save to Cache (Async)
-    EdgeRuntime.waitUntil(saveMedicationToDB(clean));
+    // 2. Save to Cache
+    await saveMedicationToDB(clean);
 
     return new Response(JSON.stringify(clean), {
       status: 200,
