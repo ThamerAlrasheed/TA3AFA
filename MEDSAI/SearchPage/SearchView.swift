@@ -7,8 +7,6 @@ struct SearchView: View {
     @State private var errorText: String?
     @State private var result: DrugPayload?
 
-    @State private var fetchTask: Task<Void, Never>?
-
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
@@ -22,9 +20,6 @@ struct SearchView: View {
                         TextField("Search medication (e.g., Augmentin, Panadol…)", text: $query)
                             .textInputAutocapitalization(.words)
                             .autocorrectionDisabled()
-                            .onChange(of: query) { _, new in
-                                scheduleLookup(for: new)
-                            }
 
                         if !query.isEmpty {
                             Button {
@@ -57,7 +52,6 @@ struct SearchView: View {
                 .padding(.horizontal)
 
                 if query.trimmingCharacters(in: .whitespaces).isEmpty {
-                    // Initial empty state
                     VStack(spacing: 12) {
                         Image(systemName: "pills.fill")
                             .font(.system(size: 42))
@@ -128,33 +122,31 @@ struct SearchView: View {
             }
             .background(Color(.systemGroupedBackground).ignoresSafeArea())
             .navigationTitle("Search")
-        }
-    }
-
-    private func scheduleLookup(for input: String) {
-        fetchTask?.cancel()
-        let trimmed = input.trimmingCharacters(in: .whitespaces)
-        guard trimmed.count >= 3 else {
-            result = nil; errorText = nil; isLoading = false
-            return
-        }
-        fetchTask = Task { [trimmed] in
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            await lookup(trimmed)
-        }
-    }
-
-    @MainActor
-    private func lookup(_ term: String) async {
-        isLoading = true
-        errorText = nil
-        defer { isLoading = false }
-        do {
-            let payload = try await DrugInfo.fetchDetails(name: term)
-            result = payload
-        } catch {
-            errorText = "Couldn’t fetch drug info. \(error.localizedDescription)"
-            result = nil
+            .task(id: query) {
+                let trimmed = query.trimmingCharacters(in: .whitespaces)
+                guard trimmed.count >= 3 else {
+                    result = nil
+                    errorText = nil
+                    return
+                }
+                
+                do {
+                    // Debounce
+                    try await Task.sleep(nanoseconds: 500_000_000)
+                    
+                    isLoading = true
+                    errorText = nil
+                    defer { isLoading = false }
+                    
+                    let payload = try await DrugInfo.fetchDetails(name: trimmed)
+                    result = payload
+                } catch is CancellationError {
+                    // Normal behavior during typing, do nothing
+                } catch {
+                    errorText = "Couldn’t fetch drug info. \(error.localizedDescription)"
+                    result = nil
+                }
+            }
         }
     }
 }
@@ -216,7 +208,13 @@ private struct FlexibleWrap<Content: View>: View {
     }
     private func viewHeightReader(_ binding: Binding<CGFloat>) -> some View {
         GeometryReader { geo -> Color in
-            DispatchQueue.main.async { binding.wrappedValue = geo.size.height }; return .clear
+            let height = geo.size.height
+            DispatchQueue.main.async {
+                if binding.wrappedValue != height {
+                    binding.wrappedValue = height
+                }
+            }
+            return .clear
         }
     }
 }

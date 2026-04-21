@@ -33,6 +33,8 @@ final class MedCatalogRepo {
         let strengths: [String]?
         let common_side_effects: [String]?
         let interactions_to_avoid: [String]?
+        let what_for: [String]?
+        let rxcui: String?
     }
 
     static let shared = MedCatalogRepo()
@@ -58,6 +60,7 @@ final class MedCatalogRepo {
             let food_rule: String?
             let min_interval_hours: Int?
             let strengths: [String]?
+            let rxcui: String?
         }
 
         let rows: [Row] = try await supabase.client
@@ -83,7 +86,9 @@ final class MedCatalogRepo {
             importantWarnings: [],
             interactionsToAvoid: row.interactions_to_avoid ?? [],
             references: nil,
-            kbKey: nil
+            kbKey: nil,
+            rxcui: row.rxcui,
+            id: nil
         )
 
         return MedCatalogEntry(
@@ -95,14 +100,15 @@ final class MedCatalogRepo {
 
     /// Upsert from payload + original name
     func upsert(from payload: DrugPayload, searchedName: String, imageURL: URL? = nil) async throws -> MedCatalogEntry {
-        let display = payload.title.isEmpty ? searchedName : payload.title
+        // Always use the user's searched name (e.g. "Zyrtec", not "Cetirizine Hydrochloride")
+        let display = searchedName.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        // Try to find existing
+        // Try to find existing by searched name
         struct ExistingRow: Decodable { let id: String; let name: String }
         let existing: [ExistingRow] = try await supabase.client
             .from("medications")
             .select("id, name")
-            .eq("name", value: display)
+            .ilike("name", value: display)
             .limit(1)
             .execute()
             .value
@@ -118,7 +124,9 @@ final class MedCatalogRepo {
                         min_interval_hours: payload.minIntervalHours,
                         strengths: payload.strengths,
                         common_side_effects: payload.commonSideEffects,
-                        interactions_to_avoid: payload.interactionsToAvoid
+                        interactions_to_avoid: payload.interactionsToAvoid,
+                        what_for: payload.indications,
+                        rxcui: payload.rxcui
                     )
                 )
                 .execute()

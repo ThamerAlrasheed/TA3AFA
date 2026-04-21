@@ -21,24 +21,33 @@ extension UIImage {
 struct DrugPayload: Codable {
     let title: String
     let strengths: [String]
-    let dosageForms: [String]        // backend doesn’t send this yet; we fill [] for now
+    let dosageForms: [String]
     let foodRule: String?            // "afterFood" | "beforeFood" | "none"
     let minIntervalHours: Int?
-    let ingredients: [String]        // backend doesn’t send ingredients yet; []
+    let ingredients: [String]
     let indications: [String]
     let howToTake: [String]
     let commonSideEffects: [String]
-    let importantWarnings: [String]  // backend doesn’t send warnings yet; []
+    let importantWarnings: [String]
     let interactionsToAvoid: [String]
-    let references: [String]?        // backend doesn’t send refs yet; nil
-    let kbKey: String?               // reserved for future; server can add later
+    let references: [String]?
+    let kbKey: String?
+    let rxcui: String?               // Canonical NIH ID
+    let id: UUID?                    // Database UUID for tracking
+}
+
+struct InteractionAlert: Codable, Identifiable {
+    var id: String { description }
+    let severity: String             // "HIGH" | "MEDIUM" | "LOW"
+    let description: String
 }
 
 // MARK: - Protocol: updated
 protocol DrugInfoProvider {
-    static func fetchDetails(name: String) async throws -> DrugPayload
+    static func fetchDetails(name: String, lang: String) async throws -> DrugPayload
     static func fetchDosageOptions(name: String) async throws -> [String]
     static func analyzeImage(base64: String) async throws -> DrugPayload
+    static func checkInteractions(rxcuis: [String], lang: String) async throws -> [InteractionAlert]
 }
 
 // MARK: - Backend wire model (matches your Cloud Function JSON) — lenient decoding
@@ -51,6 +60,8 @@ private struct BackendPayload: Codable {
     let common_side_effects: [String]?
     let how_to_take: [String]?
     let what_for: [String]?
+    let rxcui: String?
+    let id: String?
 }
 
 // MARK: - HTTP client
@@ -79,7 +90,9 @@ enum DrugInfo: DrugInfoProvider {
             importantWarnings: [],
             interactionsToAvoid: b.interactions_to_avoid ?? [],
             references: nil,
-            kbKey: nil
+            kbKey: nil,
+            rxcui: b.rxcui,
+            id: b.id.flatMap { UUID(uuidString: $0) }
         )
     }
 
@@ -105,34 +118,61 @@ enum DrugInfo: DrugInfoProvider {
             importantWarnings: toBullets(details.warnings),
             interactionsToAvoid: toBullets(details.interactions),
             references: nil,
-            kbKey: nil
+            kbKey: nil,
+            rxcui: nil,
+            id: nil
         )
     }
 
     // MARK: - Public API
 
     // NAME → details (Supabase Edge Function first, then openFDA fallback)
-    static func fetchDetails(name: String) async throws -> DrugPayload {
+    static func fetchDetails(name: String, lang: String = "English") async throws -> DrugPayload {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw NSError(domain: "DrugInfo", code: -1, userInfo: [NSLocalizedDescriptionKey: "Empty medication name"])
         }
 
-        // 1) Try Supabase Edge Function (GPT) first
+        // 1) Try Supabase Edge Function (GPT + RAG) first
         do {
             let backend: BackendPayload = try await SupabaseManager.shared.client.functions.invoke(
                 "drug-intel",
-                options: .init(body: ["name": trimmed])
+                options: .init(body: ["name": trimmed, "lang": lang])
             )
             return mapToAppModel(backend, fallbackTitle: trimmed)
         } catch {
             print("Supabase drug-intel error: \(error)")
-            // 2) Fallback: openFDA label + NDC strengths so user still gets data
+            // 2) Fallback: openFDA label + NDC strengths (No translation here)
             if let details = try? await OpenFDAService.fetchDetails(forName: trimmed) {
                 let strengths = (try? await OpenFDAService.fetchDosageOptions(forName: trimmed)) ?? []
                 return payloadFromOpenFDA(medName: trimmed, details: details, strengths: strengths)
             }
             throw error
+        }
+    }
+
+    // List of RXCUIs → Interaction alerts
+    static func checkInteractions(rxcuis: [String], lang: String = "English") async throws -> [InteractionAlert] {
+        guard rxcuis.count >= 2 else { return [] }
+        
+        struct InteractionRequest: Encodable {
+            let rxcuis: [String]
+            let lang: String
+        }
+        
+        struct InteractionResponse: Codable {
+            let interactions: [InteractionAlert]
+        }
+        
+        do {
+            let response: InteractionResponse = try await SupabaseManager.shared.client.functions.invoke(
+                "check-interactions",
+                options: .init(body: InteractionRequest(rxcuis: rxcuis, lang: lang))
+            )
+            return response.interactions
+        } catch {
+            print("Supabase check-interactions error: \(error)")
+            return []
         }
     }
 

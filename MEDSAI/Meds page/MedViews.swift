@@ -16,7 +16,8 @@ struct LocalMed: Identifiable, Hashable, Equatable {
     var ingredients: [String]?
     var minIntervalHours: Int?
     var isArchived: Bool
-    var kbKey: String?
+    var catalogId: String? // The UUID from the global medications catalog
+
 
     init(
         id: String = UUID().uuidString,
@@ -30,7 +31,7 @@ struct LocalMed: Identifiable, Hashable, Equatable {
         ingredients: [String]? = nil,
         minIntervalHours: Int? = nil,
         isArchived: Bool = false,
-        kbKey: String? = nil
+        catalogId: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -43,7 +44,7 @@ struct LocalMed: Identifiable, Hashable, Equatable {
         self.ingredients = ingredients
         self.minIntervalHours = minIntervalHours
         self.isArchived = isArchived
-        self.kbKey = kbKey
+        self.catalogId = catalogId
     }
 
     /// Decode from Supabase row
@@ -70,7 +71,7 @@ struct LocalMed: Identifiable, Hashable, Equatable {
         self.notes = row.notes
         self.isArchived = !row.is_active
         self.name = row.medications?.name ?? "Unknown"
-        self.kbKey = row.medication_id
+        self.catalogId = row.medication_id
 
         let df = ISO8601DateFormatter()
         df.formatOptions = [.withFullDate]
@@ -185,68 +186,36 @@ final class UserMedsRepo: ObservableObject {
     func add(_ med: LocalMed) async {
         guard let uid = supabase.currentUserID else { return }
         let uidString = uid.uuidString.lowercased()
-        do {
-            // 1. Ensure medication exists in global catalog and get its ID
+        
+        // 1. Ensure we have a medication_id to link to
+        var finalMedId = med.catalogId
+        
+        // 1.1 Fallback: if somehow search didn't provide an ID, do a quick lookup by name
+        if finalMedId == nil {
             struct MedIdRow: Decodable { let id: String }
-            var medLookup: [MedIdRow] = try await supabase.client
+            let lookup: [MedIdRow] = (try? await supabase.client
                 .from("medications")
                 .select("id")
                 .ilike("name", value: med.name)
                 .limit(1)
                 .execute()
-                .value
-            
-            var medId: String? = medLookup.first?.id
+                .value) ?? []
+            finalMedId = lookup.first?.id
+        }
+        
+        guard let medIdToLink = finalMedId else {
+            errorMessage = "Medication '\(med.name)' not found in the global catalog. Please search for it first."
+            return
+        }
 
-            // 1.1 If not found, try to fetch info and upsert to catalog
-            if medId == nil {
-                print("Medication '\(med.name)' not in catalog. Fetching and upserting...")
-                do {
-                    let payload = try await DrugInfo.fetchDetails(name: med.name)
-                    _ = try? await MedCatalogRepo.shared.upsert(from: payload, searchedName: med.name)
-                    
-                    // Re-lookup ID after upsert — try original name first
-                    medLookup = try await supabase.client
-                        .from("medications")
-                        .select("id")
-                        .ilike("name", value: med.name)
-                        .limit(1)
-                        .execute()
-                        .value
-                    medId = medLookup.first?.id
-                    
-                    // If still nil, the catalog stored it under the generic/payload title
-                    // (e.g. user typed "Zyrtec" but openFDA returned "Cetirizine Hydrochloride")
-                    if medId == nil, !payload.title.isEmpty,
-                       payload.title.caseInsensitiveCompare(med.name) != .orderedSame {
-                        medLookup = try await supabase.client
-                            .from("medications")
-                            .select("id")
-                            .ilike("name", value: payload.title)
-                            .limit(1)
-                            .execute()
-                            .value
-                        medId = medLookup.first?.id
-                    }
-                } catch {
-                    print("⚠️ Failed to fetch details for '\(med.name)':", error)
-                    errorMessage = "Could not fetch info for '\(med.name)'. \(error.localizedDescription)"
-                    return
-                }
-            }
-            
-            guard let finalMedId = medId else {
-                errorMessage = "Medication '\(med.name)' not found in catalog and could not be fetched. Please check the spelling."
-                return
-            }
-
+        do {
             let isoFmt = ISO8601DateFormatter()
             isoFmt.formatOptions = [.withFullDate]
 
             let row = UserMedicationUpsertPayload(
                 id: med.id,
                 user_id: uidString,
-                medication_id: finalMedId,
+                medication_id: medIdToLink,
                 dosage: med.dosage,
                 frequency_per_day: med.frequencyPerDay,
                 frequency_hours: med.minIntervalHours,
@@ -422,7 +391,7 @@ struct MedListView: View {
             // Info sheet
             .sheet(item: $infoMed) { med in
                 NavigationStack {
-                    MedDetailView(medName: med.name, kbKey: med.kbKey)
+                    MedDetailView(medName: med.name, catalogId: med.catalogId)
                         .navigationTitle("Details")
                         .navigationBarTitleDisplayMode(.inline)
                 }
@@ -518,6 +487,7 @@ struct AddLocalMedView: View {
     @State private var infoChips: [String]
     @State private var parsedFoodRule: FoodRule
     @State private var parsedMinInterval: Int?
+    @State private var catalogId: String? // Captured UUID
 
     // Strengths from GPT
     @State private var dosageOptions: [String]
@@ -547,6 +517,7 @@ struct AddLocalMedView: View {
         }()
         _parsedFoodRule = State(initialValue: food)
         _parsedMinInterval = State(initialValue: p?.minIntervalHours)
+        _catalogId = State(initialValue: p?.id?.uuidString)
     }
     @State private var selectedDosageOption: String? = nil
 
@@ -649,7 +620,8 @@ struct AddLocalMedView: View {
             foodRule: parsedFoodRule,
             notes: notes.isEmpty ? nil : notes,
             ingredients: nil,
-            minIntervalHours: parsedMinInterval
+            minIntervalHours: parsedMinInterval,
+            catalogId: catalogId
         )
 
         onSave(med)
@@ -692,6 +664,7 @@ struct AddLocalMedView: View {
             default: parsedFoodRule = .none
             }
             parsedMinInterval = payload.minIntervalHours
+            catalogId = payload.id?.uuidString
 
             // Chips
             var chips: [String] = []
@@ -810,7 +783,7 @@ struct EditLocalMedView: View {
 // MARK: - Details — try catalog first, else GPT then cache
 struct MedDetailView: View {
     let medName: String
-    var kbKey: String?
+    var catalogId: String?
 
     @State private var loading = true
     @State private var payload: DrugPayload?
@@ -828,17 +801,23 @@ struct MedDetailView: View {
 
                     if !p.strengths.isEmpty { WrapChips(items: p.strengths) }
 
-                    if p.foodRule != nil || p.minIntervalHours != nil {
-                        InfoSection(title: "Rules", bullets: [
-                            p.foodRule.map { "Food: \($0)" },
-                            p.minIntervalHours.map { "Minimum interval: \($0)h" }
-                        ].compactMap { $0 })
-                    }
+                    // Rules section with human-readable labels
+                    let foodLabel: String? = {
+                        switch p.foodRule {
+                        case "afterFood", "after_food": return "Take after eating"
+                        case "beforeFood", "before_food": return "Take before eating"
+                        case "none": return nil
+                        default: return p.foodRule
+                        }
+                    }()
+                    let ruleItems = [foodLabel, p.minIntervalHours.map { "Minimum interval: \($0)h" }].compactMap { $0 }
+                    if !ruleItems.isEmpty { InfoSection(title: "Rules", bullets: ruleItems) }
 
-                    if !p.howToTake.isEmpty { InfoSection(title: "How to take", bullets: p.howToTake) }
                     if !p.indications.isEmpty { InfoSection(title: "What it’s for", bullets: p.indications) }
+                    if !p.howToTake.isEmpty { InfoSection(title: "How to take", bullets: p.howToTake) }
                     if !p.interactionsToAvoid.isEmpty { InfoSection(title: "Don’t mix with", bullets: p.interactionsToAvoid) }
                     if !p.commonSideEffects.isEmpty { InfoSection(title: "Common side effects", bullets: p.commonSideEffects) }
+                    if !p.importantWarnings.isEmpty { InfoSection(title: "Important warnings", bullets: p.importantWarnings) }
 
                     Text("Source: AI-extracted drug information. Educational only — not medical advice.")
                         .font(.footnote).foregroundStyle(.secondary).padding(.top, 8)
@@ -854,8 +833,9 @@ struct MedDetailView: View {
         .task { await load() }
     }
 
-    private func loadFromCatalog(nameOrKey: String) async -> DrugPayload? {
+    private func loadFromCatalog() async -> DrugPayload? {
         struct CatalogRow: Decodable {
+            let id: String
             let name: String
             let food_rule: String?
             let min_interval_hours: Int?
@@ -863,16 +843,25 @@ struct MedDetailView: View {
             let common_side_effects: [String]?
             let how_to_take: [String]?
             let strengths: [String]?
+            let what_for: [String]?
+            let rxcui: String?
         }
         do {
-            let rows: [CatalogRow] = try await SupabaseManager.shared.client
-                .from("medications")
-                .select()
-                .eq("name", value: nameOrKey)
+            var query = SupabaseManager.shared.client.from("medications").select()
+            
+            if let cid = catalogId {
+                query = query.eq("id", value: cid)
+            } else {
+                query = query.ilike("name", value: medName)
+            }
+            
+            let rows: [CatalogRow] = try await query
                 .limit(1)
                 .execute()
                 .value
+            
             guard let row = rows.first else { return nil }
+            
             return DrugPayload(
                 title: row.name,
                 strengths: row.strengths ?? [],
@@ -880,13 +869,15 @@ struct MedDetailView: View {
                 foodRule: row.food_rule,
                 minIntervalHours: row.min_interval_hours,
                 ingredients: [],
-                indications: [],
+                indications: row.what_for ?? [],
                 howToTake: row.how_to_take ?? [],
                 commonSideEffects: row.common_side_effects ?? [],
                 importantWarnings: [],
                 interactionsToAvoid: row.interactions_to_avoid ?? [],
                 references: nil,
-                kbKey: nil
+                kbKey: nil,
+                rxcui: row.rxcui,
+                id: UUID(uuidString: row.id)
             )
         } catch { return nil }
     }
@@ -894,24 +885,21 @@ struct MedDetailView: View {
     private func load() async {
         loading = true; defer { loading = false }
 
-        // 1) Try catalog by kbKey, then by medName
-        if let k = kbKey, let p = await loadFromCatalog(nameOrKey: k) {
-            self.payload = p; return
-        }
-        if let p = await loadFromCatalog(nameOrKey: medName) {
+        // 1) Try catalog by catalogId, then by medName
+        if let p = await loadFromCatalog() {
             self.payload = p; return
         }
 
-        // 2) Fallback to GPT call, then cache
+        // 2) AI Fallback
         do {
             let p = try await DrugInfo.fetchDetails(name: medName)
             self.payload = p
         } catch {
-            self.payload = nil
-            self.errorText = "We couldn’t find details for “\(medName)”."
+            errorText = "Could not find information for \(medName)."
         }
     }
 }
+
 
 // MARK: - Small reusable views
 private struct InfoSection: View {
