@@ -1,0 +1,161 @@
+import SwiftUI
+import Foundation
+
+struct SearchView: View {
+    @State private var query: String = ""
+    @State private var isLoading = false
+    @State private var errorText: String?
+    @State private var result: DrugPayload?
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 12) {
+                // MARK: - Search Bar
+                HStack(spacing: 12) {
+                    HStack(spacing: 8) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundStyle(.secondary)
+                            .font(.subheadline)
+
+                        TextField("Search medication (e.g., Augmentin, Panadol…)", text: $query)
+                            .textInputAutocapitalization(.words)
+                            .autocorrectionDisabled()
+
+                        if !query.isEmpty {
+                            Button {
+                                query = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.secondary)
+                                    .font(.subheadline)
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        if isLoading {
+                            ProgressView()
+                                .controlSize(.small)
+                                .frame(width: 20, height: 20)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(Color(.secondarySystemBackground))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.primary.opacity(0.12), lineWidth: 0.5)
+                    )
+                }
+                .padding(.horizontal)
+
+                if query.trimmingCharacters(in: .whitespaces).isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "pills.fill")
+                            .font(.system(size: 42))
+                            .foregroundStyle(.secondary)
+                        Text("Search for a medicine to see details")
+                            .font(.headline)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxHeight: .infinity)
+                } else if let err = errorText {
+                    Text(err)
+                        .foregroundStyle(.red)
+                        .font(.footnote)
+                        .padding(.horizontal)
+                } else {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 16) {
+                            if let r = result {
+                                Text(r.title.isEmpty ? query : r.title)
+                                    .font(.title2).bold()
+                                    .padding(.horizontal)
+
+                                if !r.strengths.isEmpty {
+                                    SectionHeader("Strengths")
+                                    WrapChips(items: r.strengths)
+                                        .padding(.horizontal)
+                                }
+
+                                if r.foodRule != nil || r.minIntervalHours != nil {
+                                    SectionHeader("Rules")
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        if let fr = r.foodRule { Text("Food: \(fr)") }
+                                        if let ih = r.minIntervalHours { Text("Min interval: \(ih)h") }
+                                    }
+                                    .padding(.horizontal)
+                                }
+
+                                if !r.howToTake.isEmpty {
+                                    InfoSection(title: "How to take", bullets: r.howToTake)
+                                        .padding(.horizontal)
+                                }
+
+                                if !r.indications.isEmpty {
+                                    InfoSection(title: "What it’s for", bullets: r.indications)
+                                        .padding(.horizontal)
+                                }
+
+                                if !r.interactionsToAvoid.isEmpty {
+                                    InfoSection(title: "Don’t mix with", bullets: r.interactionsToAvoid)
+                                        .padding(.horizontal)
+                                }
+
+                                if !r.commonSideEffects.isEmpty {
+                                    InfoSection(title: "Common side effects", bullets: r.commonSideEffects)
+                                        .padding(.horizontal)
+                                }
+                            } else if !isLoading {
+                                ContentUnavailableView(
+                                    "No results",
+                                    systemImage: "magnifyingglass",
+                                    description: Text("Try a different spelling or a brand/generic name.")
+                                )
+                                .padding(.top, 24)
+                            }
+                        }
+                        .padding(.bottom, 20)
+                    }
+                }
+            }
+            .background(Color(.systemGroupedBackground).ignoresSafeArea())
+            .navigationTitle("Search")
+            .task(id: query) {
+                let trimmed = query.trimmingCharacters(in: .whitespaces)
+                guard trimmed.count >= 3 else {
+                    result = nil
+                    errorText = nil
+                    return
+                }
+                
+                do {
+                    // Debounce
+                    try await Task.sleep(nanoseconds: 500_000_000)
+                    
+                    isLoading = true
+                    errorText = nil
+                    defer { isLoading = false }
+                    
+                    let payload = try await DrugInfo.fetchDetails(name: trimmed)
+                    result = payload
+                } catch is CancellationError {
+                    // Normal behavior during typing, do nothing
+                } catch {
+                    errorText = "Couldn’t fetch drug info. \(error.localizedDescription)"
+                    result = nil
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Helpers (same as before)
+
+private struct SectionHeader: View {
+    let title: String
+    init(_ title: String) { self.title = title }
+    var body: some View { Text(title).font(.headline).padding(.horizontal) }
+}
