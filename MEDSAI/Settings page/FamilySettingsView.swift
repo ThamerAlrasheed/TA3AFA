@@ -139,6 +139,7 @@ struct FamilySettingsView: View {
 }
 
 struct ManagedPatientSettingsView: View {
+    @EnvironmentObject var settings: AppSettings
     @State var patient: FamilySettingsView.PatientProfile
     var onUpdate: () -> Void
     @Environment(\.dismiss) private var dismiss
@@ -155,11 +156,19 @@ struct ManagedPatientSettingsView: View {
             Section {
                 Button {
                     let pid = UUID(uuidString: patient.id)
-                    if SupabaseManager.shared.activePatientID == pid {
+                    let wasActing = (SupabaseManager.shared.activePatientID == pid)
+                    
+                    if wasActing {
                         SupabaseManager.shared.activePatientID = nil
                     } else {
                         SupabaseManager.shared.activePatientID = pid
                     }
+                    
+                    // Reload routine and profile for the new context
+                    Task {
+                        await settings.loadRoutineFromSupabase()
+                    }
+                    
                     onUpdate()
                 } label: {
                     HStack {

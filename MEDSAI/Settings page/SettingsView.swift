@@ -35,6 +35,23 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
+                if let _ = supabase.activePatientID {
+                    Section {
+                        Button(role: .destructive) {
+                            supabase.activePatientID = nil
+                            Task { await settings.loadRoutineFromSupabase() }
+                        } label: {
+                            HStack {
+                                Image(systemName: "person.fill.xmark")
+                                Text("Stop Acting as \(settings.firstName)")
+                                    .bold()
+                            }
+                        }
+                    } footer: {
+                        Text("You are currently viewing and managing \(settings.firstName)'s profile.")
+                    }
+                }
+
                 profileSection
                 familySection
                 dailyRoutineSection

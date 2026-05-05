@@ -156,7 +156,12 @@ final class AppSettings: ObservableObject {
 
             if let fn = row.first_name { firstName = fn }
             if let ln = row.last_name  { lastName = ln }
-            if let r = row.role { role = UserRole(rawValue: r) ?? .regular }
+            
+            // Only update role if we are NOT currently acting as a patient
+            // (prevents caregivers from being locked into the patient role UI)
+            if let r = row.role, supabase.activePatientID == nil {
+                role = UserRole(rawValue: r) ?? .regular
+            }
 
             isApplyingRemote = false
         } catch {
@@ -178,7 +183,7 @@ final class AppSettings: ObservableObject {
         ]
 
         do {
-            try await self.supabase.retry {
+            _ = try await self.supabase.retry {
                 try await self.supabase.client
                     .from("users")
                     .update(data)
