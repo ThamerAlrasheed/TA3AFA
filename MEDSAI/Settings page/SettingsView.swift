@@ -35,6 +35,24 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
+                if settings.role == .patient {
+                    Section {
+                        Button {
+                            // Already in patient mode, but we can re-verify current user ID
+                            // or provide an 'Act as Myself' button for symmetry
+                            Task { await settings.loadRoutineFromSupabase() }
+                        } label: {
+                            HStack {
+                                Image(systemName: "person.circle.fill")
+                                Text("Act as Myself (\(settings.firstName))")
+                                    .bold()
+                            }
+                        }
+                    } footer: {
+                        Text("You are managing your own healthcare schedule.")
+                    }
+                }
+                
                 if let _ = supabase.activePatientID {
                     Section {
                         Button(role: .destructive) {

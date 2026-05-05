@@ -184,6 +184,9 @@ struct ManagedPatientSettingsView: View {
             Section {
                 Toggle("Can add medications", isOn: $patient.canPatientAddMeds)
                     .onChange(of: patient.canPatientAddMeds) { _, _ in Task { await savePermissions() } }
+                
+                Toggle("Can manage calendar", isOn: $patient.canPatientManageCalendar)
+                    .onChange(of: patient.canPatientManageCalendar) { _, _ in Task { await savePermissions() } }
             } header: {
                 Text("Patient Permissions")
             }

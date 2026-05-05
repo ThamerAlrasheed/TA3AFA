@@ -172,6 +172,7 @@ final class SupabaseManager {
     func updatePatientPermissions(
         patientId: UUID,
         canAddMeds: Bool,
+        canManageCalendar: Bool,
         notifyMeds: Bool,
         notifyApps: Bool
     ) async throws {
@@ -179,6 +180,7 @@ final class SupabaseManager {
             .from("caregiver_relations")
             .update([
                 "can_patient_add_meds": canAddMeds,
+                "can_patient_manage_calendar": canManageCalendar,
                 "notify_patient_meds": notifyMeds,
                 "notify_patient_appointments": notifyApps
             ])

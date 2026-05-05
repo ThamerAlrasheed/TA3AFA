@@ -27,6 +27,7 @@ final class UserMedsRepo: ObservableObject {
     @Published private(set) var errorMessage: String?
     @Published private(set) var isSignedIn = false
     @Published private(set) var canAddMeds = true
+    @Published private(set) var canManageCalendar = true
     @Published private(set) var notifyMeds = true
     @Published private(set) var notifyAppointments = true
 
@@ -54,13 +55,14 @@ final class UserMedsRepo: ObservableObject {
             if uid != supabase.authenticatedUserID || supabase.isPatientMode {
                 struct PermissionRow: Decodable {
                     let can_patient_add_meds: Bool
+                    let can_patient_manage_calendar: Bool
                     let notify_patient_meds: Bool
                     let notify_patient_appointments: Bool
                 }
                 let perms: [PermissionRow] = try await self.supabase.retry {
                     try await self.supabase.client
                         .from("caregiver_relations")
-                        .select("can_patient_add_meds, notify_patient_meds, notify_patient_appointments")
+                        .select("can_patient_add_meds, can_patient_manage_calendar, notify_patient_meds, notify_patient_appointments")
                         .eq("patient_id", value: uidString)
                         .execute()
                         .value
@@ -68,15 +70,18 @@ final class UserMedsRepo: ObservableObject {
                 
                 if let first = perms.first {
                     self.canAddMeds = first.can_patient_add_meds
+                    self.canManageCalendar = first.can_patient_manage_calendar
                     self.notifyMeds = first.notify_patient_meds
                     self.notifyAppointments = first.notify_patient_appointments
                 } else {
                     self.canAddMeds = true
+                    self.canManageCalendar = true
                     self.notifyMeds = true
                     self.notifyAppointments = true
                 }
             } else {
                 self.canAddMeds = true
+                self.canManageCalendar = true
                 self.notifyMeds = true
                 self.notifyAppointments = true
             }
@@ -108,21 +113,39 @@ final class UserMedsRepo: ObservableObject {
         // 1. Ensure we have a medication_id to link to
         var finalMedId = med.catalogId
         
-        // 1.1 Fallback: if somehow search didn't provide an ID, do a quick lookup by name
+        // 1.1 Improved Link Logic: Search by name if ID is missing or if we want to be safe
         if finalMedId == nil {
-            struct MedIdRow: Decodable { let id: String }
-            let lookup: [MedIdRow] = (try? await supabase.client
-                .from("medications")
-                .select("id")
-                .ilike("name", pattern: med.name)
-                .limit(1)
-                .execute()
-                .value) ?? []
-            finalMedId = lookup.first?.id
+            do {
+                // Try to find or create in catalog
+                // We'll use a placeholder DrugPayload if we don't have one, 
+                // but usually the UI provides it from the search result.
+                let dummyPayload = DrugPayload(
+                    title: med.name,
+                    strengths: [],
+                    dosageForms: [],
+                    foodRule: "none",
+                    minIntervalHours: nil,
+                    ingredients: [],
+                    indications: [],
+                    howToTake: [],
+                    commonSideEffects: [],
+                    importantWarnings: [],
+                    interactionsToAvoid: [],
+                    references: nil,
+                    kbKey: nil,
+                    rxcui: nil,
+                    id: nil
+                )
+                
+                let entry = try await MedCatalogRepo.shared.upsert(from: dummyPayload, searchedName: med.name)
+                finalMedId = entry.payload.id?.uuidString
+            } catch {
+                print("⚠️ Failed to auto-catalog med: \(error)")
+            }
         }
         
         guard let medIdToLink = finalMedId else {
-            errorMessage = "Medication '\(med.name)' not found in the global catalog. Please search for it first."
+            errorMessage = "Medication '\(med.name)' could not be found or created in the catalog."
             return
         }
 

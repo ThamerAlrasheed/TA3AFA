@@ -114,7 +114,7 @@ struct SchedulePageView: View {
                                     .font(.headline)
                                     .monospacedDigit()
 
-                                if settings.role != .patient {
+                                if settings.role != .patient || repo.canManageCalendar {
                                     Menu {
                                         Button { editingAppointment = appt } label: {
                                             Label("Edit", systemImage: "pencil")
