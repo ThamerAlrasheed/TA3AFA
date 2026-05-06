@@ -57,6 +57,7 @@ struct SettingsView: View {
                     Section {
                         Button(role: .destructive) {
                             supabase.activePatientID = nil
+                            settings.activePatientID = nil
                             Task { await settings.loadRoutineFromSupabase() }
                         } label: {
                             HStack {
@@ -320,6 +321,8 @@ struct SettingsView: View {
         Task {
             try? await supabase.client.auth.signOut()
             await MainActor.run {
+                supabase.activePatientID = nil
+                settings.activePatientID = nil
                 settings.didChooseEntry = false
                 settings.onboardingCompleted = false
             }

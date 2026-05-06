@@ -44,6 +44,12 @@ final class AppointmentsRepo: ObservableObject {
         let uidString = uid.uuidString.lowercased()
         isLoading = true; errorMessage = nil
         do {
+            if supabase.isPatientMode || supabase.activePatientID != nil {
+                self.items = try await self.supabase.fetchPatientAppointments()
+                isLoading = false
+                return
+            }
+
             let rows: [AppointmentRow] = try await self.supabase.retry {
                 try await self.supabase.client
                     .from("appointments")
@@ -74,6 +80,19 @@ final class AppointmentsRepo: ObservableObject {
         let uidString = uid.uuidString.lowercased()
         Task {
             do {
+                if supabase.isPatientMode || supabase.activePatientID != nil {
+                    try await supabase.savePatientAppointment(
+                        id: nil,
+                        title: title,
+                        type: type,
+                        date: date,
+                        notes: notes
+                    )
+                    await fetchAppointments()
+                    completion?(nil)
+                    return
+                }
+
                 let row = AppointmentInsertPayload(
                     user_id: uidString,
                     title: title,
@@ -97,6 +116,19 @@ final class AppointmentsRepo: ObservableObject {
     func update(id: String, title: String, type: AppointmentType, date: Date, location: String?, notes: String?, completion: ((Error?) -> Void)? = nil) {
         Task {
             do {
+                if supabase.isPatientMode || supabase.activePatientID != nil {
+                    try await supabase.savePatientAppointment(
+                        id: id,
+                        title: title,
+                        type: type,
+                        date: date,
+                        notes: notes
+                    )
+                    await fetchAppointments()
+                    completion?(nil)
+                    return
+                }
+
                 let data = AppointmentUpdatePayload(
                     title: title,
                     doctor_name: type.rawValue,
@@ -119,6 +151,12 @@ final class AppointmentsRepo: ObservableObject {
     @MainActor
     func delete(_ appointment: Appointment) async {
         do {
+            if supabase.isPatientMode || supabase.activePatientID != nil {
+                try await supabase.deletePatientAppointment(id: appointment.id)
+                await fetchAppointments()
+                return
+            }
+
             try await supabase.client
                 .from("appointments")
                 .delete()

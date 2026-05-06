@@ -51,6 +51,17 @@ final class UserMedsRepo: ObservableObject {
         let uidString = uid.uuidString.lowercased()
         isLoading = true; errorMessage = nil
         do {
+            if supabase.isPatientMode || supabase.activePatientID != nil {
+                let context = try await self.supabase.fetchPatientMedicationContext()
+                self.canAddMeds = context.canAddMeds
+                self.canManageCalendar = context.canManageCalendar
+                self.notifyMeds = context.notifyMeds
+                self.notifyAppointments = context.notifyAppointments
+                self.meds = context.medications.compactMap { LocalMed(row: $0) }
+                isLoading = false
+                return
+            }
+
             // 1. Fetch Permission if needed (Only for patients or impersonated contexts)
             if uid != supabase.authenticatedUserID || supabase.isPatientMode {
                 struct PermissionRow: Decodable {
@@ -109,6 +120,17 @@ final class UserMedsRepo: ObservableObject {
     func add(_ med: LocalMed) async {
         guard let uid = supabase.currentUserID else { return }
         let uidString = uid.uuidString.lowercased()
+
+        if supabase.isPatientMode || supabase.activePatientID != nil {
+            do {
+                try await supabase.savePatientMedication(med)
+                await fetchMeds()
+            } catch {
+                print("⚠️ patient add med failed:", error)
+                errorMessage = error.localizedDescription
+            }
+            return
+        }
         
         // 1. Ensure we have a medication_id to link to
         var finalMedId = med.catalogId
@@ -182,6 +204,12 @@ final class UserMedsRepo: ObservableObject {
 
     func delete(_ med: LocalMed) async {
         do {
+            if supabase.isPatientMode || supabase.activePatientID != nil {
+                try await supabase.deletePatientMedication(id: med.id)
+                await fetchMeds()
+                return
+            }
+
             try await supabase.client
                 .from("user_medications")
                 .delete()
@@ -195,6 +223,12 @@ final class UserMedsRepo: ObservableObject {
 
     func setArchived(_ med: LocalMed, archived: Bool) async {
         do {
+            if supabase.isPatientMode || supabase.activePatientID != nil {
+                try await supabase.archivePatientMedication(id: med.id, archived: archived)
+                await fetchMeds()
+                return
+            }
+
             try await supabase.client
                 .from("user_medications")
                 .update(ArchivePayload(is_active: !archived))

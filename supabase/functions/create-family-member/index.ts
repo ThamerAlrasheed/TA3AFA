@@ -7,6 +7,7 @@ type CreateFamilyMemberRequest = {
   allergies?: unknown;
   conditions?: unknown;
   can_patient_add_meds?: boolean;
+  can_patient_manage_calendar?: boolean;
   notify_patient_meds?: boolean;
   notify_patient_appointments?: boolean;
 };
@@ -95,6 +96,7 @@ Deno.serve(async (req) => {
   const conditions = sanitizeStringArray(payload.conditions);
   
   const canPatientAddMeds = payload.can_patient_add_meds ?? true;
+  const canPatientManageCalendar = payload.can_patient_manage_calendar ?? true;
   const notifyPatientMeds = payload.notify_patient_meds ?? true;
   const notifyPatientAppointments = payload.notify_patient_appointments ?? true;
 
@@ -143,6 +145,7 @@ Deno.serve(async (req) => {
     patient_id: patientId,
     status: "pending",
     can_patient_add_meds: canPatientAddMeds,
+    can_patient_manage_calendar: canPatientManageCalendar,
     notify_patient_meds: notifyPatientMeds,
     notify_patient_appointments: notifyPatientAppointments,
   });

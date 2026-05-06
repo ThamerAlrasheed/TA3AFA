@@ -18,7 +18,14 @@ final class AppSettings: ObservableObject {
     @Published var role: UserRole {
         didSet { UserDefaults.standard.set(role.rawValue, forKey: "userRole") }
     }
-    @Published var activePatientID: String? = nil // If caregiver, who are we viewing?
+    @Published var activePatientID: String? {
+        didSet {
+            let patientID = activePatientID.flatMap { UUID(uuidString: $0) }
+            if SupabaseManager.shared.activePatientID != patientID {
+                SupabaseManager.shared.activePatientID = patientID
+            }
+        }
+    } // If caregiver, who are we viewing?
     @Published var familyMembers: [String] = []  // Names/IDs of linked patients
 
     // Routine (meals & sleep) – single source of truth for scheduling
@@ -66,6 +73,7 @@ final class AppSettings: ObservableObject {
         // Restore persisted role
         let savedRole = UserDefaults.standard.string(forKey: "userRole") ?? UserRole.regular.rawValue
         role = UserRole(rawValue: savedRole) ?? .regular
+        activePatientID = SupabaseManager.shared.activePatientID?.uuidString.lowercased()
 
         // Routine defaults (these are used until we load from Supabase)
         breakfast = DateComponents(hour: 8,  minute: 0)

@@ -11,6 +11,7 @@ final class SupabaseManager {
         let allergies: [String]
         let conditions: [String]
         let canPatientAddMeds: Bool
+        let canPatientManageCalendar: Bool
         let notifyPatientMeds: Bool
         let notifyPatientAppointments: Bool
 
@@ -21,6 +22,7 @@ final class SupabaseManager {
             case allergies
             case conditions
             case canPatientAddMeds = "can_patient_add_meds"
+            case canPatientManageCalendar = "can_patient_manage_calendar"
             case notifyPatientMeds = "notify_patient_meds"
             case notifyPatientAppointments = "notify_patient_appointments"
         }
@@ -52,6 +54,100 @@ final class SupabaseManager {
         }
     }
 
+    struct PatientMedicationContext {
+        let medications: [LocalMed.DBRow]
+        let canAddMeds: Bool
+        let canManageCalendar: Bool
+        let notifyMeds: Bool
+        let notifyAppointments: Bool
+    }
+
+    private struct PatientMedicationRequest: Encodable {
+        let action: String
+        let deviceToken: String?
+        let targetPatientID: String?
+        let medication: PatientMedicationPayload?
+        let appointment: PatientAppointmentPayload?
+        let id: String?
+
+        enum CodingKeys: String, CodingKey {
+            case action
+            case deviceToken = "device_token"
+            case targetPatientID = "target_patient_id"
+            case medication
+            case appointment
+            case id
+        }
+    }
+
+    private struct PatientMedicationPayload: Encodable {
+        let id: String
+        let name: String
+        let dosage: String
+        let frequencyPerDay: Int
+        let frequencyHours: Int?
+        let startDate: String
+        let endDate: String
+        let notes: String?
+        let foodRule: String
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case name
+            case dosage
+            case frequencyPerDay = "frequency_per_day"
+            case frequencyHours = "frequency_hours"
+            case startDate = "start_date"
+            case endDate = "end_date"
+            case notes
+            case foodRule = "food_rule"
+        }
+    }
+
+    private struct PatientMedicationFunctionResponse: Decodable {
+        struct Permissions: Decodable {
+            let can_patient_add_meds: Bool?
+            let can_patient_manage_calendar: Bool?
+            let notify_patient_meds: Bool?
+            let notify_patient_appointments: Bool?
+        }
+
+        let medications: [LocalMed.DBRow]?
+        let appointments: [PatientAppointmentRow]?
+        let permissions: Permissions?
+    }
+
+    private struct PatientAppointmentPayload: Encodable {
+        let id: String?
+        let title: String
+        let doctorName: String
+        let appointmentTime: String
+        let notes: String?
+
+        enum CodingKeys: String, CodingKey {
+            case id
+            case title
+            case doctorName = "doctor_name"
+            case appointmentTime = "appointment_time"
+            case notes
+        }
+    }
+
+    private struct PatientAppointmentRow: Decodable {
+        let id: String
+        let title: String
+        let doctor_name: String?
+        let appointment_time: String
+        let notes: String?
+
+        func toAppointment() -> Appointment {
+            let type = AppointmentType.fromString(doctor_name)
+            let date = ISO8601DateFormatter().date(from: appointment_time) ?? Date()
+            let normalizedNotes = (notes?.isEmpty == true) ? nil : notes
+            return Appointment(id: id, title: title, type: type, date: date, location: nil, notes: normalizedNotes)
+        }
+    }
+
     private struct FunctionErrorResponse: Decodable {
         let error: String
     }
@@ -79,6 +175,10 @@ final class SupabaseManager {
     var patientUserID: UUID? {
         guard let str = UserDefaults.standard.string(forKey: "patientUserId") else { return nil }
         return UUID(uuidString: str)
+    }
+
+    var patientDeviceToken: String? {
+        UserDefaults.standard.string(forKey: "deviceToken")
     }
 
     /// The patient ID currently being managed by a caregiver.
@@ -195,6 +295,7 @@ final class SupabaseManager {
         allergies: [String],
         conditions: [String],
         canAddMeds: Bool,
+        canManageCalendar: Bool,
         notifyMeds: Bool,
         notifyApps: Bool
     ) async throws -> CreateFamilyMemberResponse {
@@ -216,6 +317,7 @@ final class SupabaseManager {
             allergies: allergies,
             conditions: conditions,
             canPatientAddMeds: canAddMeds,
+            canPatientManageCalendar: canManageCalendar,
             notifyPatientMeds: notifyMeds,
             notifyPatientAppointments: notifyApps
         )
@@ -285,5 +387,199 @@ final class SupabaseManager {
                 )
             }
         }
+    }
+
+    func fetchPatientMedicationContext() async throws -> PatientMedicationContext {
+        let requestContext = try patientFunctionRequestContext()
+
+        let response: PatientMedicationFunctionResponse = try await invokePatientMedicationFunction(
+            PatientMedicationRequest(
+                action: "list",
+                deviceToken: requestContext.deviceToken,
+                targetPatientID: requestContext.targetPatientID,
+                medication: nil,
+                appointment: nil,
+                id: nil
+            )
+        )
+
+        let permissions = response.permissions
+        return PatientMedicationContext(
+            medications: response.medications ?? [],
+            canAddMeds: permissions?.can_patient_add_meds ?? true,
+            canManageCalendar: permissions?.can_patient_manage_calendar ?? true,
+            notifyMeds: permissions?.notify_patient_meds ?? true,
+            notifyAppointments: permissions?.notify_patient_appointments ?? true
+        )
+    }
+
+    func savePatientMedication(_ med: LocalMed) async throws {
+        let requestContext = try patientFunctionRequestContext()
+
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate]
+
+        let payload = PatientMedicationPayload(
+            id: med.id,
+            name: med.name,
+            dosage: med.dosage,
+            frequencyPerDay: med.frequencyPerDay,
+            frequencyHours: med.minIntervalHours,
+            startDate: formatter.string(from: med.startDate),
+            endDate: formatter.string(from: med.endDate),
+            notes: normalizedNotes(med.notes),
+            foodRule: med.foodRule.rawValue
+        )
+
+        let _: PatientMedicationFunctionResponse = try await invokePatientMedicationFunction(
+            PatientMedicationRequest(
+                action: "save",
+                deviceToken: requestContext.deviceToken,
+                targetPatientID: requestContext.targetPatientID,
+                medication: payload,
+                appointment: nil,
+                id: nil
+            )
+        )
+    }
+
+    func fetchPatientAppointments() async throws -> [Appointment] {
+        let requestContext = try patientFunctionRequestContext()
+
+        let response: PatientMedicationFunctionResponse = try await invokePatientMedicationFunction(
+            PatientMedicationRequest(
+                action: "list_appointments",
+                deviceToken: requestContext.deviceToken,
+                targetPatientID: requestContext.targetPatientID,
+                medication: nil,
+                appointment: nil,
+                id: nil
+            )
+        )
+
+        return (response.appointments ?? []).map { $0.toAppointment() }
+    }
+
+    func savePatientAppointment(id: String?, title: String, type: AppointmentType, date: Date, notes: String?) async throws {
+        let requestContext = try patientFunctionRequestContext()
+
+        let payload = PatientAppointmentPayload(
+            id: id,
+            title: title,
+            doctorName: type.rawValue,
+            appointmentTime: ISO8601DateFormatter().string(from: date),
+            notes: normalizedNotes(notes)
+        )
+
+        let _: PatientMedicationFunctionResponse = try await invokePatientMedicationFunction(
+            PatientMedicationRequest(
+                action: "save_appointment",
+                deviceToken: requestContext.deviceToken,
+                targetPatientID: requestContext.targetPatientID,
+                medication: nil,
+                appointment: payload,
+                id: nil
+            )
+        )
+    }
+
+    func deletePatientAppointment(id: String) async throws {
+        let requestContext = try patientFunctionRequestContext()
+
+        let _: PatientMedicationFunctionResponse = try await invokePatientMedicationFunction(
+            PatientMedicationRequest(
+                action: "delete_appointment",
+                deviceToken: requestContext.deviceToken,
+                targetPatientID: requestContext.targetPatientID,
+                medication: nil,
+                appointment: nil,
+                id: id
+            )
+        )
+    }
+
+    func deletePatientMedication(id: String) async throws {
+        let requestContext = try patientFunctionRequestContext()
+
+        let _: PatientMedicationFunctionResponse = try await invokePatientMedicationFunction(
+            PatientMedicationRequest(
+                action: "delete_medication",
+                deviceToken: requestContext.deviceToken,
+                targetPatientID: requestContext.targetPatientID,
+                medication: nil,
+                appointment: nil,
+                id: id
+            )
+        )
+    }
+
+    func archivePatientMedication(id: String, archived: Bool) async throws {
+        let requestContext = try patientFunctionRequestContext()
+
+        let _: PatientMedicationFunctionResponse = try await invokePatientMedicationFunction(
+            PatientMedicationRequest(
+                action: archived ? "archive_medication" : "restore_medication",
+                deviceToken: requestContext.deviceToken,
+                targetPatientID: requestContext.targetPatientID,
+                medication: nil,
+                appointment: nil,
+                id: id
+            )
+        )
+    }
+
+    private func patientFunctionRequestContext() throws -> (deviceToken: String?, targetPatientID: String?) {
+        if let activePatientID {
+            return (nil, activePatientID.uuidString.lowercased())
+        }
+
+        if let deviceToken = patientDeviceToken, !deviceToken.isEmpty {
+            return (deviceToken, nil)
+        }
+
+        throw NSError(
+            domain: "SupabaseManager",
+            code: 401,
+            userInfo: [NSLocalizedDescriptionKey: "Patient session is missing. Please reconnect with your caregiver code."]
+        )
+    }
+
+    private func invokePatientMedicationFunction<T: Decodable>(_ request: PatientMedicationRequest) async throws -> T {
+        do {
+            return try await client.functions.invoke(
+                "patient-medications",
+                options: .init(method: .post, body: request)
+            )
+        } catch let error as FunctionsError {
+            switch error {
+            case let .httpError(code, data):
+                if let decoded = try? JSONDecoder().decode(FunctionErrorResponse.self, from: data) {
+                    throw NSError(
+                        domain: "SupabaseManager",
+                        code: code,
+                        userInfo: [NSLocalizedDescriptionKey: decoded.error]
+                    )
+                }
+
+                let body = String(data: data, encoding: .utf8)
+                throw NSError(
+                    domain: "SupabaseManager",
+                    code: code,
+                    userInfo: [NSLocalizedDescriptionKey: body ?? "The patient-medications function request failed."]
+                )
+            case .relayError:
+                throw NSError(
+                    domain: "SupabaseManager",
+                    code: 502,
+                    userInfo: [NSLocalizedDescriptionKey: "Supabase could not reach the patient-medications function."]
+                )
+            }
+        }
+    }
+
+    private func normalizedNotes(_ notes: String?) -> String? {
+        guard let notes else { return nil }
+        let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
     }
 }

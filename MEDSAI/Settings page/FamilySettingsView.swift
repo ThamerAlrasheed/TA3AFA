@@ -13,6 +13,7 @@ struct FamilySettingsView: View {
         let lastName: String
         let status: String
         var canPatientAddMeds: Bool = true
+        var canPatientManageCalendar: Bool = true
         var notifyPatientMeds: Bool = true
         var notifyPatientAppointments: Bool = true
     }
@@ -53,7 +54,7 @@ struct FamilySettingsView: View {
                                         .foregroundStyle(.secondary)
                                 }
                                 Spacer()
-                                if SupabaseManager.shared.activePatientID?.uuidString == patient.id {
+                                if SupabaseManager.shared.activePatientID == UUID(uuidString: patient.id) {
                                     Text("Acting as")
                                         .font(.caption2)
                                         .bold()
@@ -104,6 +105,7 @@ struct FamilySettingsView: View {
             let patient_id: String
             let status: String
             let can_patient_add_meds: Bool
+            let can_patient_manage_calendar: Bool
             let notify_patient_meds: Bool
             let notify_patient_appointments: Bool
             struct UserRef: Decodable {
@@ -116,7 +118,7 @@ struct FamilySettingsView: View {
         do {
             let rows: [RelationRow] = try await supabase.client
                 .from("caregiver_relations")
-                .select("patient_id, status, can_patient_add_meds, notify_patient_meds, notify_patient_appointments, users!caregiver_relations_patient_id_fkey(first_name, last_name)")
+                .select("patient_id, status, can_patient_add_meds, can_patient_manage_calendar, notify_patient_meds, notify_patient_appointments, users!caregiver_relations_patient_id_fkey(first_name, last_name)")
                 .eq("caregiver_id", value: uidString)
                 .execute()
                 .value
@@ -128,6 +130,7 @@ struct FamilySettingsView: View {
                     lastName: $0.users?.last_name ?? "",
                     status: $0.status,
                     canPatientAddMeds: $0.can_patient_add_meds,
+                    canPatientManageCalendar: $0.can_patient_manage_calendar,
                     notifyPatientMeds: $0.notify_patient_meds,
                     notifyPatientAppointments: $0.notify_patient_appointments
                 )
@@ -148,6 +151,7 @@ struct ManagedPatientSettingsView: View {
     @State private var newCaregiverEmail = ""
     @State private var statusMessage: String?
     @State private var isSaving = false
+    @State private var isActingAsPatient = false
 
     private var supabase: SupabaseManager { .shared }
 
@@ -156,13 +160,11 @@ struct ManagedPatientSettingsView: View {
             Section {
                 Button {
                     let pid = UUID(uuidString: patient.id)
-                    let wasActing = (SupabaseManager.shared.activePatientID == pid)
-                    
-                    if wasActing {
-                        SupabaseManager.shared.activePatientID = nil
-                    } else {
-                        SupabaseManager.shared.activePatientID = pid
-                    }
+                    let newPatientID = isActingAsPatient ? nil : pid
+
+                    SupabaseManager.shared.activePatientID = newPatientID
+                    settings.activePatientID = newPatientID?.uuidString.lowercased()
+                    isActingAsPatient = newPatientID != nil
                     
                     // Reload routine and profile for the new context
                     Task {
@@ -172,11 +174,11 @@ struct ManagedPatientSettingsView: View {
                     onUpdate()
                 } label: {
                     HStack {
-                        Image(systemName: SupabaseManager.shared.activePatientID?.uuidString == patient.id ? "person.fill.xmark" : "person.fill.checkmark")
-                        Text(SupabaseManager.shared.activePatientID?.uuidString == patient.id ? "Stop Acting as \(patient.firstName)" : "Act as \(patient.firstName)")
+                        Image(systemName: isActingAsPatient ? "person.fill.xmark" : "person.fill.checkmark")
+                        Text(isActingAsPatient ? "Stop Acting as \(patient.firstName)" : "Act as \(patient.firstName)")
                     }
                 }
-                .foregroundStyle(SupabaseManager.shared.activePatientID?.uuidString == patient.id ? .red : .green)
+                .foregroundStyle(isActingAsPatient ? .red : .green)
             } footer: {
                 Text("When 'Acting as' is enabled, adding medications, appointments, and allergies will be done on behalf of \(patient.firstName).")
             }
@@ -246,6 +248,9 @@ struct ManagedPatientSettingsView: View {
                 ProgressView().controlSize(.large)
             }
         }
+        .onAppear {
+            isActingAsPatient = SupabaseManager.shared.activePatientID == UUID(uuidString: patient.id)
+        }
     }
 
     private func savePermissions() async {
@@ -257,6 +262,7 @@ struct ManagedPatientSettingsView: View {
             try await supabase.updatePatientPermissions(
                 patientId: pid,
                 canAddMeds: patient.canPatientAddMeds,
+                canManageCalendar: patient.canPatientManageCalendar,
                 notifyMeds: patient.notifyPatientMeds,
                 notifyApps: patient.notifyPatientAppointments
             )
@@ -280,6 +286,8 @@ struct ManagedPatientSettingsView: View {
             // Context cleanup if needed
             if SupabaseManager.shared.activePatientID == pid {
                 SupabaseManager.shared.activePatientID = nil
+                settings.activePatientID = nil
+                isActingAsPatient = false
             }
             onUpdate()
             try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -302,6 +310,7 @@ struct AddFamilyMemberView: View {
     
     // Initial Settings
     @State private var canAddMeds = true
+    @State private var canManageCalendar = true
     @State private var notifyMeds = true
     @State private var notifyApps = true
 
@@ -375,6 +384,7 @@ struct AddFamilyMemberView: View {
                     
                     Section {
                         Toggle("Can add medications", isOn: $canAddMeds)
+                        Toggle("Can manage calendar", isOn: $canManageCalendar)
                         Toggle("Medication Reminders", isOn: $notifyMeds)
                         Toggle("Appointment Reminders", isOn: $notifyApps)
                     } header: {
@@ -429,6 +439,7 @@ struct AddFamilyMemberView: View {
                 allergies: allergies,
                 conditions: conditions,
                 canAddMeds: canAddMeds,
+                canManageCalendar: canManageCalendar,
                 notifyMeds: notifyMeds,
                 notifyApps: notifyApps
             )

@@ -76,7 +76,7 @@ struct SchedulePageView: View {
                     Text("No appointments on this day.")
                         .foregroundStyle(.secondary)
 
-                    if settings.role != .patient {
+                    if settings.role != .patient || repo.canManageCalendar {
                         // Centered, perfectly centered text inside the green pill
                         HStack {
                             Spacer()
@@ -141,7 +141,7 @@ struct SchedulePageView: View {
                         Divider().padding(.leading, 16)
                     }
 
-                    if settings.role != .patient {
+                    if settings.role != .patient || repo.canManageCalendar {
                         // Centered "Add appointment" pill under list
                         HStack {
                             Spacer()
