@@ -58,6 +58,15 @@ struct MedListView: View {
             }
             .navigationTitle("Meds")
             .toolbar {
+                if settings.role == .caregiver {
+                    ToolbarItem(placement: .topBarLeading) {
+                        CareProfileMenu {
+                            repo.start()
+                        }
+                        .environmentObject(settings)
+                    }
+                }
+
                 if repo.canAddMeds || settings.role == .caregiver {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
@@ -150,6 +159,7 @@ struct MedListView: View {
                 Text("“\(med.name)” and its scheduled doses will be removed.")
             }
             .onAppear { repo.start() }
+            .onChange(of: settings.activePatientID) { _, _ in repo.start() }
         }
     }
 }

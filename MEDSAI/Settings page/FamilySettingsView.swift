@@ -34,42 +34,35 @@ struct FamilySettingsView: View {
                                 Task { await loadPatients() }
                             }
                         } label: {
-                            HStack {
-                                VStack(alignment: .leading) {
-                                    HStack {
-                                        Text("\(patient.firstName) \(patient.lastName)")
-                                            .font(.headline)
-                                        
+                            HStack(spacing: 12) {
+                                Image(systemName: "person.crop.circle.fill")
+                                    .font(.title2)
+                                    .foregroundStyle(.green)
+                                    .frame(width: 32)
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(displayName(for: patient))
+                                        .font(.headline)
+
+                                    HStack(spacing: 6) {
                                         Text(patient.status.capitalized)
                                             .font(.caption2)
-                                            .padding(.horizontal, 6)
-                                            .padding(.vertical, 2)
-                                            .background(patient.status == "active" ? .green.opacity(0.1) : .orange.opacity(0.1))
+                                            .padding(.horizontal, 7)
+                                            .padding(.vertical, 3)
+                                            .background(patient.status == "active" ? .green.opacity(0.12) : .orange.opacity(0.12))
                                             .clipShape(Capsule())
                                             .foregroundStyle(patient.status == "active" ? .green : .orange)
                                     }
-                                    
-                                    Text("Patient")
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
                                 }
+
                                 Spacer()
-                                if SupabaseManager.shared.activePatientID == UUID(uuidString: patient.id) {
-                                    Text("Acting as")
-                                        .font(.caption2)
-                                        .bold()
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
-                                        .background(.green.opacity(0.1))
-                                        .clipShape(Capsule())
-                                        .foregroundStyle(.green)
-                                }
                             }
                         }
+                        .padding(.vertical, 6)
                     }
                 }
             } header: {
-                Text("Connected Family Members")
+                Text("Family Members")
             }
             
             Section {
@@ -86,7 +79,7 @@ struct FamilySettingsView: View {
                 Text("Adding a family member allows you to manage their medications and schedule.")
             }
         }
-        .navigationTitle("My Family")
+        .navigationTitle("Family Members")
         .sheet(isPresented: $showingAddMember) {
             AddFamilyMemberView { _ in
                 Task { await loadPatients() }
@@ -94,7 +87,11 @@ struct FamilySettingsView: View {
         }
         .task { await loadPatients() }
     }
-    
+
+    private func displayName(for patient: PatientProfile) -> String {
+        "\(patient.firstName) \(patient.lastName)".trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     private func loadPatients() async {
         guard let uid = supabase.authenticatedUserID else { return }
         let uidString = uid.uuidString.lowercased()
@@ -135,8 +132,126 @@ struct FamilySettingsView: View {
                     notifyPatientAppointments: $0.notify_patient_appointments
                 )
             }
+            settings.familyMembers = patients.map(\.id)
+        } catch is CancellationError {
+            return
         } catch {
             print("⚠️ loadPatients failed for \(uidString):", error)
+        }
+    }
+}
+
+struct CareProfileMenu: View {
+    @EnvironmentObject var settings: AppSettings
+    var onSelectionChanged: () -> Void
+
+    @State private var patients: [FamilySettingsView.PatientProfile] = []
+    @State private var isLoading = false
+
+    private var supabase: SupabaseManager { .shared }
+
+    var body: some View {
+        Menu {
+            Button {
+                selectSelf()
+            } label: {
+                Label("My profile", systemImage: settings.activePatientID == nil ? "checkmark.circle.fill" : "person.circle")
+            }
+
+            if isLoading {
+                Label("Loading family…", systemImage: "hourglass")
+            } else if patients.isEmpty {
+                Label("No family members", systemImage: "person.2.slash")
+            } else {
+                Divider()
+                ForEach(patients) { patient in
+                    Button {
+                        select(patient)
+                    } label: {
+                        Label(displayName(for: patient), systemImage: isSelected(patient) ? "checkmark.circle.fill" : "person.crop.circle")
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: settings.activePatientID == nil ? "person.2.circle.fill" : "person.crop.circle.badge.checkmark")
+                if settings.activePatientID != nil {
+                    Text(settings.activeCareDisplayName)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                }
+            }
+            .foregroundStyle(.green)
+        }
+        .task { await loadPatients() }
+    }
+
+    private func selectSelf() {
+        settings.stopActingAsPatient()
+        Task { await settings.loadRoutineFromSupabase() }
+        onSelectionChanged()
+    }
+
+    private func select(_ patient: FamilySettingsView.PatientProfile) {
+        guard let pid = UUID(uuidString: patient.id) else { return }
+        settings.actAsPatient(id: pid, displayName: displayName(for: patient))
+        Task { await settings.loadRoutineFromSupabase() }
+        onSelectionChanged()
+    }
+
+    private func isSelected(_ patient: FamilySettingsView.PatientProfile) -> Bool {
+        settings.activePatientID == patient.id.lowercased()
+    }
+
+    private func displayName(for patient: FamilySettingsView.PatientProfile) -> String {
+        "\(patient.firstName) \(patient.lastName)".trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func loadPatients() async {
+        guard let uid = supabase.authenticatedUserID else { return }
+        let uidString = uid.uuidString.lowercased()
+        isLoading = true
+        defer { isLoading = false }
+
+        struct RelationRow: Decodable {
+            let patient_id: String
+            let status: String
+            let can_patient_add_meds: Bool
+            let can_patient_manage_calendar: Bool
+            let notify_patient_meds: Bool
+            let notify_patient_appointments: Bool
+            struct UserRef: Decodable {
+                let first_name: String?
+                let last_name: String?
+            }
+            let users: UserRef?
+        }
+
+        do {
+            let rows: [RelationRow] = try await supabase.client
+                .from("caregiver_relations")
+                .select("patient_id, status, can_patient_add_meds, can_patient_manage_calendar, notify_patient_meds, notify_patient_appointments, users!caregiver_relations_patient_id_fkey(first_name, last_name)")
+                .eq("caregiver_id", value: uidString)
+                .execute()
+                .value
+
+            patients = rows.map {
+                FamilySettingsView.PatientProfile(
+                    id: $0.patient_id,
+                    firstName: $0.users?.first_name ?? "",
+                    lastName: $0.users?.last_name ?? "",
+                    status: $0.status,
+                    canPatientAddMeds: $0.can_patient_add_meds,
+                    canPatientManageCalendar: $0.can_patient_manage_calendar,
+                    notifyPatientMeds: $0.notify_patient_meds,
+                    notifyPatientAppointments: $0.notify_patient_appointments
+                )
+            }
+            settings.familyMembers = patients.map(\.id)
+        } catch is CancellationError {
+            return
+        } catch {
+            print("⚠️ CareProfileMenu loadPatients failed for \(uidString):", error)
         }
     }
 }
@@ -151,38 +266,12 @@ struct ManagedPatientSettingsView: View {
     @State private var newCaregiverEmail = ""
     @State private var statusMessage: String?
     @State private var isSaving = false
-    @State private var isActingAsPatient = false
+    @State private var showRemoveConfirmation = false
 
     private var supabase: SupabaseManager { .shared }
 
     var body: some View {
         List {
-            Section {
-                Button {
-                    let pid = UUID(uuidString: patient.id)
-                    let newPatientID = isActingAsPatient ? nil : pid
-
-                    SupabaseManager.shared.activePatientID = newPatientID
-                    settings.activePatientID = newPatientID?.uuidString.lowercased()
-                    isActingAsPatient = newPatientID != nil
-                    
-                    // Reload routine and profile for the new context
-                    Task {
-                        await settings.loadRoutineFromSupabase()
-                    }
-                    
-                    onUpdate()
-                } label: {
-                    HStack {
-                        Image(systemName: isActingAsPatient ? "person.fill.xmark" : "person.fill.checkmark")
-                        Text(isActingAsPatient ? "Stop Acting as \(patient.firstName)" : "Act as \(patient.firstName)")
-                    }
-                }
-                .foregroundStyle(isActingAsPatient ? .red : .green)
-            } footer: {
-                Text("When 'Acting as' is enabled, adding medications, appointments, and allergies will be done on behalf of \(patient.firstName).")
-            }
-
             Section {
                 Toggle("Can add medications", isOn: $patient.canPatientAddMeds)
                     .onChange(of: patient.canPatientAddMeds) { _, _ in Task { await savePermissions() } }
@@ -232,6 +321,22 @@ struct ManagedPatientSettingsView: View {
             } footer: {
                 Text("Transferring will move \(patient.firstName) to a new caregiver. You will lose access immediately.")
             }
+
+            Section {
+                Button(role: .destructive) {
+                    showRemoveConfirmation = true
+                } label: {
+                    HStack {
+                        Image(systemName: "person.fill.xmark")
+                        Text("Remove Family Member")
+                    }
+                }
+                .disabled(isSaving)
+            } header: {
+                Text("Remove Access")
+            } footer: {
+                Text("Removing \(patient.firstName) will stop showing their medications, appointments, and settings in your family list.")
+            }
             
             if let msg = statusMessage {
                 Section {
@@ -243,13 +348,18 @@ struct ManagedPatientSettingsView: View {
         }
         .navigationTitle("\(patient.firstName)'s Settings")
         .disabled(isSaving)
+        .alert("Remove \(patient.firstName)?", isPresented: $showRemoveConfirmation) {
+            Button("Remove", role: .destructive) {
+                Task { await removeFamilyMember() }
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("You will no longer be able to manage this family member from your caregiver account.")
+        }
         .overlay {
             if isSaving {
                 ProgressView().controlSize(.large)
             }
-        }
-        .onAppear {
-            isActingAsPatient = SupabaseManager.shared.activePatientID == UUID(uuidString: patient.id)
         }
     }
 
@@ -285,9 +395,7 @@ struct ManagedPatientSettingsView: View {
             statusMessage = "Success! Patient transferred."
             // Context cleanup if needed
             if SupabaseManager.shared.activePatientID == pid {
-                SupabaseManager.shared.activePatientID = nil
-                settings.activePatientID = nil
-                isActingAsPatient = false
+                settings.stopActingAsPatient()
             }
             onUpdate()
             try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -297,6 +405,28 @@ struct ManagedPatientSettingsView: View {
             statusMessage = "Transfer failed: \(error.localizedDescription)"
         }
     }
+
+    private func removeFamilyMember() async {
+        guard let pid = UUID(uuidString: patient.id) else { return }
+        let pidString = pid.uuidString.lowercased()
+        isSaving = true
+        statusMessage = nil
+        defer { isSaving = false }
+
+        do {
+            try await supabase.removeFamilyMember(patientId: pid)
+            if SupabaseManager.shared.activePatientID == pid {
+                settings.stopActingAsPatient()
+            }
+            settings.familyMembers.removeAll { $0.lowercased() == pidString }
+            onUpdate()
+            dismiss()
+        } catch {
+            print("⚠️ removeFamilyMember failed for \(pidString):", error)
+            statusMessage = "Remove failed: \(error.localizedDescription)"
+        }
+    }
+
 }
 
 struct AddFamilyMemberView: View {

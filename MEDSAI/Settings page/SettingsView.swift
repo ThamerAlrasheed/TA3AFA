@@ -52,27 +52,8 @@ struct SettingsView: View {
                         Text("You are managing your own healthcare schedule.")
                     }
                 }
-                
-                if let _ = supabase.activePatientID {
-                    Section {
-                        Button(role: .destructive) {
-                            supabase.activePatientID = nil
-                            settings.activePatientID = nil
-                            Task { await settings.loadRoutineFromSupabase() }
-                        } label: {
-                            HStack {
-                                Image(systemName: "person.fill.xmark")
-                                Text("Stop Acting as \(settings.firstName)")
-                                    .bold()
-                            }
-                        }
-                    } footer: {
-                        Text("You are currently viewing and managing \(settings.firstName)'s profile.")
-                    }
-                }
-
+                familyMembersSection
                 profileSection
-                familySection
                 dailyRoutineSection
                 notificationsSection
                 appearanceSection
@@ -126,15 +107,22 @@ struct SettingsView: View {
         }
     }
 
-    private var familySection: some View {
-        Section(header: Text("Family / Caregiver")) {
+    private var familyMembersSection: some View {
+        Section(header: Text("Family Members")) {
             NavigationLink {
                 FamilySettingsView()
                     .environmentObject(settings)
             } label: {
-                HStack {
-                    Image(systemName: "person.2.fill").foregroundStyle(.green)
-                    Text("My Family")
+                HStack(spacing: 12) {
+                    Image(systemName: "person.2.fill")
+                        .foregroundStyle(.green)
+                        .frame(width: 32)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Manage family")
+                        Text("Open each member to adjust permissions and care settings")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
@@ -321,8 +309,7 @@ struct SettingsView: View {
         Task {
             try? await supabase.client.auth.signOut()
             await MainActor.run {
-                supabase.activePatientID = nil
-                settings.activePatientID = nil
+                settings.stopActingAsPatient()
                 settings.didChooseEntry = false
                 settings.onboardingCompleted = false
             }

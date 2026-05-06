@@ -33,6 +33,18 @@ struct SchedulePageView: View {
             }
             .background(Color(.systemGroupedBackground).ignoresSafeArea())
             .navigationTitle("Calendar")
+            .toolbar {
+                if settings.role == .caregiver {
+                    ToolbarItem(placement: .topBarLeading) {
+                        CareProfileMenu {
+                            repo.start()
+                            appts.start()
+                            recomputeDoses()
+                        }
+                        .environmentObject(settings)
+                    }
+                }
+            }
             .onAppear {
                 repo.start()
                 appts.start()
@@ -45,6 +57,11 @@ struct SchedulePageView: View {
             .onChange(of: settings.dinner)    { _, _ in recomputeDoses() }
             .onChange(of: settings.bedtime)   { _, _ in recomputeDoses() }
             .onChange(of: settings.wakeup)    { _, _ in recomputeDoses() }
+            .onChange(of: settings.activePatientID) { _, _ in
+                repo.start()
+                appts.start()
+                recomputeDoses()
+            }
             .sheet(isPresented: $showAddAppointment) {
                 AddAppointmentView(repo: appts, defaultDate: selectedDate, existing: nil)
             }

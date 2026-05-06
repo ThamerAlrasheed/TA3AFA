@@ -17,7 +17,7 @@ struct RootTabView: View {
                 SchedulePageView().tag(1)
                 MedListView().tag(2)
                 SearchView().tag(3)
-                if settings.role == .patient {
+                if settings.role == .patient && settings.activePatientID == nil {
                     PatientSettingsView().tag(4)
                 } else {
                     SettingsView().tag(4)
@@ -29,10 +29,24 @@ struct RootTabView: View {
             }
 
             // Custom glass bar (the only bar you see)
-            GlassTabBar(selection: $selection)
+            GlassTabBar(selection: $selection) { nextSelection in
+                selectTab(nextSelection)
+            }
                 .padding(.horizontal, 16)
                 .padding(.bottom, 12)
                 .ignoresSafeArea(.keyboard) // don’t jump when keyboard appears
+        }
+    }
+
+    private func selectTab(_ nextSelection: Int) {
+        guard nextSelection != selection else { return }
+
+        if settings.activePatientID != nil {
+            settings.stopActingAsPatient()
+        }
+
+        withAnimation(.easeInOut(duration: 0.18)) {
+            selection = nextSelection
         }
     }
 }
@@ -41,6 +55,7 @@ struct RootTabView: View {
 
 private struct GlassTabBar: View {
     @Binding var selection: Int
+    let onSelect: (Int) -> Void
 
     private struct Item: Identifiable {
         let id: Int
@@ -65,9 +80,7 @@ private struct GlassTabBar: View {
                     title: item.title,
                     systemImage: item.systemImage
                 ) {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        selection = item.id
-                    }
+                    onSelect(item.id)
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 }
                 .frame(maxWidth: .infinity) // equal width per tab

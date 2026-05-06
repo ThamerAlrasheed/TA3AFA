@@ -24,8 +24,20 @@ final class AppSettings: ObservableObject {
             if SupabaseManager.shared.activePatientID != patientID {
                 SupabaseManager.shared.activePatientID = patientID
             }
+            if activePatientID == nil {
+                activePatientName = nil
+            }
         }
     } // If caregiver, who are we viewing?
+    @Published var activePatientName: String? {
+        didSet {
+            if let activePatientName, !activePatientName.isEmpty {
+                UserDefaults.standard.set(activePatientName, forKey: "activePatientName")
+            } else {
+                UserDefaults.standard.removeObject(forKey: "activePatientName")
+            }
+        }
+    }
     @Published var familyMembers: [String] = []  // Names/IDs of linked patients
 
     // Routine (meals & sleep) – single source of truth for scheduling
@@ -74,6 +86,7 @@ final class AppSettings: ObservableObject {
         let savedRole = UserDefaults.standard.string(forKey: "userRole") ?? UserRole.regular.rawValue
         role = UserRole(rawValue: savedRole) ?? .regular
         activePatientID = SupabaseManager.shared.activePatientID?.uuidString.lowercased()
+        activePatientName = UserDefaults.standard.string(forKey: "activePatientName")
 
         // Routine defaults (these are used until we load from Supabase)
         breakfast = DateComponents(hour: 8,  minute: 0)
@@ -124,12 +137,36 @@ final class AppSettings: ObservableObject {
         onboardingCompleted = false
     }
 
+    @MainActor
+    func actAsPatient(id: UUID, displayName: String) {
+        activePatientName = displayName
+        activePatientID = id.uuidString.lowercased()
+    }
+
+    @MainActor
+    func stopActingAsPatient() {
+        activePatientID = nil
+        activePatientName = nil
+    }
+
+    var activeCareDisplayName: String {
+        if let activePatientName, !activePatientName.isEmpty {
+            return activePatientName
+        }
+        if !firstName.isEmpty {
+            return firstName
+        }
+        return "Family member"
+    }
+
     // MARK: - Supabase sync
 
     /// Call after sign-in (or app start if already signed in) to pull routine from Postgres.
     @MainActor
     func loadRoutineFromSupabase() async {
         guard let uid = supabase.currentUserID else { return }
+        let requestedUserID = uid
+        let wasActingAtRequestStart = supabase.activePatientID != nil
 
         do {
             struct UserRow: Decodable {
@@ -153,6 +190,7 @@ final class AppSettings: ObservableObject {
                     .value
             }
 
+            guard supabase.currentUserID == requestedUserID else { return }
             guard let row = rows.first else { return }
 
             isApplyingRemote = true
@@ -167,7 +205,7 @@ final class AppSettings: ObservableObject {
             
             // Only update role if we are NOT currently acting as a patient
             // (prevents caregivers from being locked into the patient role UI)
-            if let r = row.role, supabase.activePatientID == nil {
+            if let r = row.role, !wasActingAtRequestStart, supabase.activePatientID == nil {
                 role = UserRole(rawValue: r) ?? .regular
             }
 

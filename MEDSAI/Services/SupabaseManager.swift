@@ -288,6 +288,23 @@ final class SupabaseManager {
             .execute()
     }
 
+    func removeFamilyMember(patientId: UUID) async throws {
+        guard let caregiverId = authenticatedUserID else {
+            throw NSError(
+                domain: "SupabaseManager",
+                code: 401,
+                userInfo: [NSLocalizedDescriptionKey: "You must be signed in with a caregiver account."]
+            )
+        }
+
+        try await client
+            .from("caregiver_relations")
+            .delete()
+            .eq("caregiver_id", value: caregiverId.uuidString.lowercased())
+            .eq("patient_id", value: patientId.uuidString.lowercased())
+            .execute()
+    }
+
     func createFamilyMember(
         firstName: String,
         lastName: String,

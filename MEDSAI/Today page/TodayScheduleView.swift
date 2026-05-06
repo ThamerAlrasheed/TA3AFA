@@ -47,32 +47,16 @@ struct TodayScheduleView: View {
                 }
             }
             .listStyle(.insetGrouped)
-            .navigationTitle(settings.activePatientID == nil ? "Today" : "Family Member's Today")
+            .navigationTitle("Today")
             .toolbar {
-                if !settings.familyMembers.isEmpty {
+                if settings.role == .caregiver {
                     ToolbarItem(placement: .topBarLeading) {
-                        Menu {
-                            Button {
-                                settings.activePatientID = nil
-                            } label: {
-                                Label("My Meds", systemImage: "person.circle")
-                            }
-                            
-                            ForEach(settings.familyMembers, id: \.self) { patientId in
-                                Button {
-                                    settings.activePatientID = patientId
-                                } label: {
-                                    Label("Dad's Meds", systemImage: "person.2")
-                                }
-                            }
-                        } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "person.2.circle.fill")
-                                Image(systemName: "chevron.down")
-                                    .font(.system(size: 10, weight: .bold))
-                            }
-                            .foregroundStyle(.green)
+                        CareProfileMenu {
+                            medsRepo.start()
+                            apptsRepo.start()
+                            recomputeDoses()
                         }
+                        .environmentObject(settings)
                     }
                 }
             }
@@ -94,6 +78,11 @@ struct TodayScheduleView: View {
             .onChange(of: medsRepo.meds) { _, _ in
                 recomputeDoses()
                 Task { await scheduleNotificationsForToday() }
+            }
+            .onChange(of: settings.activePatientID) { _, _ in
+                medsRepo.start()
+                apptsRepo.start()
+                recomputeDoses()
             }
             .onChange(of: settings.breakfast) { _, _ in reactToSettings() }
             .onChange(of: settings.lunch)     { _, _ in reactToSettings() }
