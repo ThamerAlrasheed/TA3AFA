@@ -1,0 +1,48 @@
+~/workspace$ git checkout main -- "MEDSAI/App/RootTabView.swift" \
+  "MEDSAI/Meds page/AddLocalMedView.swift" \
+  "MEDSAI/SearchPage/SearchView.swift" \
+  "MEDSAI/Settings page/SettingsView.swift"
+~/workspace$ git commit -m "Fix caregiver dropdown and allergy warnings"
+On branch main
+Your branch is ahead of 'origin/main' by 2 commits.
+  (use "git push" to publish your local commits)
+
+nothing to commit, working tree clean
+~/workspace$ git  origin swift-fixes-only:main
+git: 'origin' is not a git command. See 'git --help'.
+~/workspace$ git push origin swift-fixes-only:main
+error: src refspec swift-fixes-only does not match any
+error: failed to push some refs to 'https://github.com/ThamerAlrasheed/TA3AFA'
+~/workspace$ git checkout main -- "MEDSAI/App/RootTabView.swift" "MEDSAI/Meds page/AddLocalMedView.swift" "MEDSAI/SearchPage/SearchView.swift" "MEDSAI/Settings page/SettingsView.swift"
+~/workspace$ git commit -m "Fix caregiver dropdown and allergy warnings"
+On branch main
+Your branch is ahead of 'origin/main' by 2 commits.
+  (use "git push" to publish your local commits)
+
+nothing to commit, working tree clean
+~/workspace$ git checkout -b swift-fixes-only origin/main
+branch 'swift-fixes-only' set up to track 'origin/main'.
+Switched to a new branch 'swift-fixes-only'
+~/workspace$ git checkout main -- "MEDSAI/App/RootTabView.swift" "MEDSAI/Meds page/AddLocalMedView.swift" "MEDSAI/SearchPage/SearchView.swift" "MEDSAI/Settings page/SettingsView.swift"
+~/workspace$ git commit -m "Fix caregiver dropdown and allergy warnings"
+[swift-fixes-only 70bc427] Fix caregiver dropdown and allergy warnings
+ 4 files changed, 46 insertions(+), 8 deletions(-)
+~/workspace$ git push origin swift-fixes-only:main
+Enumerating objects: 21, done.
+Counting objects: 100% (21/21), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (11/11), done.
+Writing objects: 100% (11/11), 1.71 KiB | 1.71 MiB/s, done.
+Total 11 (delta 10), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (10/10), completed with 10 local objects.
+To https://github.com/ThamerAlrasheed/TA3AFA
+   e306589..70bc427  swift-fixes-only -> main
+~/workspace$ git checkout main && git branch -d swift-fixes-only
+Switched to branch 'main'
+Your branch and 'origin/main' have diverged,
+and have 2 and 1 different commits each, respectively.
+  (use "git pull" if you want to integrate the remote branch with yours)
+warning: deleting branch 'swift-fixes-only' that has been merged to
+         'refs/remotes/origin/main', but not yet merged to HEAD
+Deleted branch swift-fixes-only (was 70bc427).
+~/workspace$ 
