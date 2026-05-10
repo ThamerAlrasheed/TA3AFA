@@ -1,0 +1,432 @@
+You are working on an iOS SwiftUI medication-care app called ISTSEH. The app has patients and caregivers. It uses Supabase Edge Functions and Supabase Postgres.
+
+Important current problem:
+Two features are broken or incomplete in the live simulator:
+
+1. The caregiver / active patient dropdown menu disappeared from all pages.
+   - Previously the app had a caregiver/active-patient switcher/dropdown/button visible across pages.
+   - It allowed a caregiver to see/switch the active patient context.
+   - It should appear consistently on all main tabs/pages where patient context matters.
+   - Current screenshot shows only a green group icon button on the Meds page, but the actual dropdown/switcher is gone.
+
+2. Allergy warnings still do not show in the live Add Medication flow.
+   - Duplicate ingredient warnings work.
+   - Example working: Ibuprofen + Motrin shows Duplicate warning.
+   - But when the patient has an allergy to Brufen/Ibuprofen/NSAID and I add Ibuprofen, the safety sheet only shows Duplicate, not Allergy.
+   - This is wrong.
+   - If allergy exists, the sheet must show ALLERGY_CONFLICT and block save.
+
+Current known working behavior:
+- Duplicate badges work on Meds page.
+- Duplicate warning for Ibuprofen + Motrin works.
+- Duplicate warning text now says “Multiple medications contain ibuprofen.”
+- Meds page now shows Duplicate badges for Ibuprofen and Motrin.
+- Build has succeeded before.
+
+Current known broken behavior:
+- Caregiver/active-patient dropdown is missing from all pages.
+- Allergy hard-block is not visible in live Add Medication flow.
+- Chronic disease warnings are not implemented yet. Do not pretend they are.
+- Conditions can be stored, but condition-drug conflict engine does not exist yet.
+
+Do not start branding/legal.
+Do not change care-code hashing.
+Do not change Keychain/session persistence unless required to fix active patient context.
+Do not change image-to-drug.
+Do not change drug-intel except if required for medication ingredient compatibility.
+Do not change parse-schedule unless required for compatibility.
+Do not remove existing working duplicate warning behavior.
+
+Main goal:
+Fix caregiver context UI and live allergy safety behavior end-to-end.
+
+Files to review:
+1. MEDSAI/App/MediScheduleApp.swift
+2. MEDSAI/Services/PatientSessionStore.swift
+3. MEDSAI/Services/SupabaseManager.swift
+4. MEDSAI/Settings page/AppSettings.swift
+5. MEDSAI/Settings page/PatientSettingsView.swift
+6. MEDSAI/Settings page/SettingsView.swift
+7. MEDSAI/Settings page/MedicalProfileView.swift
+8. MEDSAI/Meds page/MedViews.swift
+9. MEDSAI/Meds page/AddLocalMedView.swift
+10. MEDSAI/Meds page/UserMedsRepo.swift
+11. MEDSAI/Meds page/LocalMed.swift
+12. MEDSAI/Utilities/DrugInfoProvider.swift
+13. MEDSAI/Utilities/SafetyWarningView.swift
+14. MEDSAI/Today page/TodayScheduleView.swift
+15. MEDSAI/Search page/SearchView.swift if relevant
+16. MEDSAI/Calendar page/SchedulePageView.swift or related schedule views
+17. supabase/functions/check-interactions/index.ts
+18. supabase/functions/patient-profile/index.ts
+19. supabase/functions/patient-medications/index.ts
+20. supabase/functions/_shared/drug-utils.ts
+
+PART A — Restore caregiver / active patient dropdown globally
+
+Problem:
+The caregiver patient switcher/dropdown disappeared from all pages.
+
+Expected:
+A caregiver should always know which patient context they are viewing, and should be able to switch active patients from all main tabs.
+
+Required behavior:
+1. Restore a reusable Patient Context Switcher component.
+2. It should be visible in all main pages/tabs where patient context matters:
+   - Today
+   - Schedule
+   - Meds
+   - Search if patient-specific
+   - Settings / Patient Settings
+3. It should show:
+   - active patient name
+   - patient/caregiver mode indicator if useful
+   - dropdown/menu to switch patient if caregiver has multiple linked patients
+4. If no active patient is selected, show clear action:
+   - “Select Patient”
+   - or show caregiver’s own context if that exists.
+5. If user is in patient mode:
+   - show patient name/context
+   - no caregiver switching unless caregiver mode is active.
+6. If the device is revoked:
+   - preserve existing revoked-device handling.
+7. Do not create multiple independent patient state stores.
+8. The dropdown must use the same shared source of truth as:
+   - Add Medication
+   - Meds page
+   - safety checks
+   - Medical Profile
+   - routine settings
+
+Implementation guidance:
+1. Search for the previous caregiver dropdown/switcher UI.
+   - It may be in PatientSettingsView, SettingsView, AppSettings, SupabaseManager, or an older reusable view.
+2. If it was accidentally removed, restore it.
+3. If no reusable component exists, create one, for example:
+   - ActivePatientMenuView.swift
+   - PatientContextSwitcher.swift
+4. The component should read from the shared app/session state:
+   - activePatientID
+   - activePatientName
+   - caregiver relations / linked patients
+   - userRole / patient mode
+5. The component should update active patient through the existing shared mechanism only.
+6. When active patient changes:
+   - refresh meds
+   - refresh safety warnings
+   - refresh medical profile if visible
+   - refresh routine settings if implemented
+   - refresh reminders if needed
+7. Avoid local-only duplicated state.
+
+UI requirement:
+- Put the switcher in the top toolbar/header area.
+- Current Meds page has a green group icon. If that is supposed to be the switcher, make it open the dropdown/menu.
+- It should be obvious and tappable.
+- The same control or same behavior should exist across the main tabs.
+
+Tests:
+1. Login as caregiver with at least two linked patients.
+2. Confirm patient switcher appears on Today, Schedule, Meds, Search if applicable, and Settings.
+3. Switch from Patient A to Patient B on Meds page.
+4. Confirm Meds list changes to Patient B.
+5. Confirm Add Medication uses Patient B.
+6. Confirm Medical Profile uses Patient B.
+7. Switch back to Patient A.
+8. Confirm no stale medications remain.
+
+PART B — Fix live allergy warning in Add Medication flow
+
+Observed issue:
+When adding Ibuprofen, only Duplicate warning appears:
+- Duplicate, Major
+- “Multiple medications contain ibuprofen.”
+- Button says “I Understand, Save Anyway”
+
+But the patient has allergy to Brufen/Ibuprofen/NSAID. Expected:
+- ALLERGY_CONFLICT should also appear.
+- Severity should be contraindicated.
+- can_continue should be false.
+- Save should be blocked.
+- Button should NOT say “Save Anyway.”
+
+Important:
+Previous backend tests claimed allergy matching works, but live simulator still does not show allergy. So do not rely only on a hand-written backend test. Capture the actual app request.
+
+Step 1 — Verify active patient context:
+1. Identify active patient_id used by AddLocalMedView.
+2. Identify whether AddLocalMedView sends:
+   - patient_id
+   - device_token
+   - Authorization header
+3. In caregiver mode, do NOT send stale patient device_token if using Authorization + patient_id.
+4. In patient mode, send device_token.
+5. Confirm check-interactions resolves the same patient that MedicalProfileView is editing.
+6. Print/debug-log redacted context:
+   - activePatientID
+   - activePatientName
+   - isPatientMode
+   - device_token present true/false
+   - accessToken present true/false
+
+Step 2 — Verify active allergies:
+For the exact active patient used by Add Medication, query patient_allergies.
+
+Report exact rows:
+- id
+- patient_id
+- name
+- normalized_name
+- severity
+- is_active
+
+If allergy row is inactive, the UI should not expect warning.
+If allergy row is active and matches Brufen/Ibuprofen/NSAID, it must trigger.
+
+Step 3 — Capture actual Add Medication safety request:
+When adding Ibuprofen in the app, log the exact JSON sent to check-interactions.
+
+Required request fields:
+- patient_id if caregiver mode
+- device_token only if patient mode
+- medications array
+- current new medication with:
+  - pending id
+  - name
+  - rxcui if available
+  - ingredients if available
+- existing active meds
+- lang
+
+Do not print full secret tokens. Redact tokens.
+
+Step 4 — Capture exact backend response:
+Log the exact response from check-interactions.
+
+Expected if allergy exists:
+Response should include:
+{
+  "type": "ALLERGY_CONFLICT",
+  "severity": "contraindicated",
+  "affected_medication_ids": ["<pending ibuprofen id>"],
+  "meds": ["Ibuprofen"],
+  "ingredients": ["ibuprofen"],
+  "source": "patient_allergies",
+  "can_continue": false
+}
+
+If backend response does not include ALLERGY_CONFLICT:
+- fix backend auth or allergy fetch/matching.
+
+If backend response includes ALLERGY_CONFLICT but UI does not show it:
+- fix iOS warning filtering or SafetyWarningView display.
+
+Step 5 — Fix allergy alias matching:
+Allergy matching must normalize both allergy names and medication names/ingredients.
+
+Required canonical mapping:
+- brufen -> ibuprofen
+- ibuprofen -> ibuprofen
+- advil -> ibuprofen
+- motrin -> ibuprofen
+- nurofen -> ibuprofen
+- nsaid -> nsaid class
+- nsaids -> nsaid class
+- nonsteroidal anti-inflammatory -> nsaid class
+- nonsteroidal anti inflammatory drug epc -> nsaid class / ibuprofen class label
+- penicillin -> penicillin class
+- penicillins -> penicillin class
+- amoxicillin -> penicillin class member
+- augmentin -> amoxicillin/clavulanate / penicillin class
+- acetaminophen -> acetaminophen
+- paracetamol -> acetaminophen
+- panadol -> acetaminophen
+- tylenol -> acetaminophen
+
+Required behavior:
+1. Allergy “Brufen” + Medication “Ibuprofen” => ALLERGY_CONFLICT.
+2. Allergy “Ibuprofen” + Medication “Motrin” => ALLERGY_CONFLICT.
+3. Allergy “NSAID” + Medication “Ibuprofen” => ALLERGY_CONFLICT.
+4. Allergy “Penicillin” + Medication “Amoxicillin” => ALLERGY_CONFLICT.
+5. Allergy “Panadol” + Medication “Tylenol” should be treated as same ingredient allergy if such allergy exists.
+
+Step 6 — Fix iOS warning filtering:
+Add-flow warning filtering was added to hide unrelated old warnings. Keep that behavior, but do not hide allergy conflicts.
+
+Rules:
+1. If warning.type == ALLERGY_CONFLICT and it involves the new med by:
+   - affected_medication_ids containing pending id, OR
+   - meds containing new med name, OR
+   - ingredients overlapping new med canonical ingredients/name,
+   then show it.
+2. If warning.severity == contraindicated or can_continue == false, always show it if it could involve the new med.
+3. Do not drop allergy warnings just because affected_medication_ids are missing or pending IDs differ.
+4. Fallback to canonical ingredient matching.
+
+Step 7 — Safety sheet behavior:
+If any visible warning has:
+- severity == contraindicated
+or
+- can_continue == false
+
+Then:
+- Hide “I Understand, Save Anyway”
+- Show “Go Back” / “Cannot Save”
+- Prevent save
+
+If visible warnings are only:
+- DUPLICATE_INGREDIENT major
+Then:
+- Allow “I Understand, Save Anyway”
+
+If both duplicate + allergy:
+- Show both cards
+- Overall save blocked
+
+PART C — Chronic diseases / conditions behavior
+
+Current known state:
+- MedicalProfileView supports conditions.
+- check-interactions may fetch conditions.
+- No condition-drug conflict engine exists yet.
+
+Required:
+1. Do not show fake chronic disease warnings.
+2. Do not claim chronic disease interaction checking is active.
+3. If conditions are present, source_trace may include:
+   patient_conditions_present_no_engine
+4. Add TODO comments for future condition-drug rules.
+5. Optional: add a small info note in Medical Profile or safety debug only, not as a warning badge:
+   “Condition-based medication checks are not fully available yet.”
+6. Do not let AI guess condition conflicts.
+
+PART D — Persistent Meds page warnings
+
+Current state:
+- Duplicate badges show on Meds page.
+- Need to ensure Allergy badges also show if an already saved medication conflicts with an active allergy.
+
+Requirements:
+1. On Meds page safety refresh, if patient has Brufen allergy and Ibuprofen is already saved, show red Allergy badge on Ibuprofen.
+2. Duplicate badges should continue working.
+3. If a med has duplicate + allergy:
+   - Show highest severity badge first.
+   - Allergy/contraindicated should outrank duplicate.
+   - Show +N if multiple warnings.
+4. Tapping badge opens warning detail sheet.
+
+PART E — Fix caregiver context and allergy logic together
+
+Important:
+These issues are related because allergy checks depend on patient context.
+
+After restoring caregiver dropdown:
+1. Switch patient.
+2. Add allergy to active patient.
+3. Add medication to same active patient.
+4. Confirm safety checks use that patient.
+5. Confirm switching patients changes visible meds, allergies, and warnings.
+
+PART F — Required manual/debug tests
+
+Run or describe these tests:
+
+Test 1 — Caregiver dropdown:
+- Caregiver has Patient A and Patient B.
+- Dropdown appears on Meds, Today, Schedule, Settings.
+- Switch Patient A -> Patient B.
+- Meds and Medical Profile update.
+
+Test 2 — Brufen allergy live add:
+- Active patient has active allergy Brufen.
+- Add medication Ibuprofen.
+Expected:
+- Safety sheet shows ALLERGY_CONFLICT.
+- Save blocked.
+
+Test 3 — Duplicate + allergy together:
+- Existing med: Motrin.
+- Active allergy: Brufen.
+- Add med: Ibuprofen.
+Expected:
+- Duplicate warning appears.
+- Allergy conflict appears.
+- Save blocked because allergy is contraindicated.
+
+Test 4 — Duplicate only:
+- No ibuprofen-family allergy.
+- Existing med: Motrin.
+- Add med: Ibuprofen.
+Expected:
+- Duplicate warning appears.
+- Save allowed with acknowledgement.
+
+Test 5 — Persistent allergy badge:
+- Active allergy: Brufen.
+- Existing med: Ibuprofen.
+Expected:
+- Meds page shows red Allergy badge on Ibuprofen.
+
+Test 6 — Patient switch:
+- Patient A has Brufen allergy.
+- Patient B does not.
+- Add Ibuprofen under Patient A: allergy warning.
+- Switch to Patient B.
+- Add Ibuprofen under Patient B: no allergy warning unless duplicate/other warning exists.
+
+Test 7 — Conditions:
+- Add chronic condition.
+Expected:
+- Condition stored.
+- No fake condition medication warning.
+- source_trace indicates no engine if relevant.
+
+PART G — Final report format
+
+Report in this exact structure:
+
+1. Caregiver dropdown root cause
+- Why it disappeared
+- Where it was restored
+- Which pages now show it
+
+2. Patient context source of truth
+- Which state/store controls activePatientID and activePatientName
+- How Add Medication, Meds page, Medical Profile, and safety checks use the same context
+
+3. Allergy warning root cause
+- Was allergy inactive?
+- Was wrong patient context used?
+- Did backend miss it?
+- Did iOS filter it out?
+- Was alias matching incomplete?
+
+4. Exact live Add Medication request JSON
+- Redact tokens
+
+5. Exact check-interactions response JSON
+- Include duplicate + allergy case
+
+6. Safety sheet behavior
+- Duplicate only
+- Allergy only
+- Duplicate + allergy
+
+7. Meds page persistent badges
+- Duplicate badge
+- Allergy badge
+- Multiple warnings priority
+
+8. Chronic disease status
+- Clearly say condition warnings are not implemented unless you actually implement deterministic rules
+
+9. Files changed
+
+10. Build result
+
+Do not claim fixed unless:
+- caregiver dropdown appears again across main pages
+- Brufen allergy + Ibuprofen shows allergy conflict in the actual add flow
+- duplicate + allergy together shows both warnings and blocks save
+- Meds page uses the same active patient context
+- build succeeds
