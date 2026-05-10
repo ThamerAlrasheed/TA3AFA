@@ -63,6 +63,16 @@ struct SettingsView: View {
             .listStyle(.insetGrouped)
             .navigationTitle("Settings")
             .tint(.green)
+            .toolbar {
+                if settings.role == .caregiver {
+                    ToolbarItem(placement: .topBarLeading) {
+                        CareProfileMenu {
+                            Task { await settings.loadRoutineFromSupabase() }
+                        }
+                        .environmentObject(settings)
+                    }
+                }
+            }
             .onAppear {
                 Task { await hydrateNamesFromSupabase() }
                 Task { await ensureNotificationAuthIfEnabled() }

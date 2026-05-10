@@ -41,10 +41,6 @@ struct RootTabView: View {
     private func selectTab(_ nextSelection: Int) {
         guard nextSelection != selection else { return }
 
-        if settings.activePatientID != nil {
-            settings.stopActingAsPatient()
-        }
-
         withAnimation(.easeInOut(duration: 0.18)) {
             selection = nextSelection
         }

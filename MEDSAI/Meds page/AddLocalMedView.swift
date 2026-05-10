@@ -530,16 +530,39 @@ struct AddLocalMedView: View {
         medName: String,
         medIngredients: [String]
     ) -> Bool {
-        if let affectedIDs = warning.affected_medication_ids, !affectedIDs.isEmpty {
-            return affectedIDs.contains(pendingID)
+        // Most precise check: backend explicitly tagged this pending med.
+        if warning.affected_medication_ids?.contains(pendingID) == true {
+            return true
         }
+
+        // For allergy conflicts and any contraindicated/blocking warning, do NOT rely
+        // solely on affected_medication_ids — also check by name and canonical ingredients.
+        // This handles cases where the pending ID is not in the list (e.g., empty array
+        // returned by backend) or canonical alias matching is needed.
+        let isBlockingOrAllergy = warning.type == .allergyConflict
+            || warning.severity == .contraindicated
+            || !warning.can_continue
 
         let newMedTerms = Set(canonicalSafetyTerms([medName] + medIngredients))
         let warningTerms = Set(canonicalSafetyTerms(warning.meds + warning.ingredients))
 
-        if !newMedTerms.isDisjoint(with: warningTerms) {
-            return true
+        if isBlockingOrAllergy {
+            if !newMedTerms.isDisjoint(with: warningTerms) { return true }
+
+            let normalizedMedName = normalizeSafetyTerm(medName)
+            if warning.meds.map(normalizeSafetyTerm).contains(where: {
+                !$0.isEmpty && ($0 == normalizedMedName || $0.contains(normalizedMedName) || normalizedMedName.contains($0))
+            }) { return true }
         }
+
+        // For non-blocking warnings, only show if affected_medication_ids is unset/empty
+        // (so we fall back to canonical term matching) or matched above.
+        if let affectedIDs = warning.affected_medication_ids, !affectedIDs.isEmpty {
+            // Already checked contains(pendingID) above — if we're here it didn't match.
+            return false
+        }
+
+        if !newMedTerms.isDisjoint(with: warningTerms) { return true }
 
         return warning.meds
             .map(normalizeSafetyTerm)

@@ -2,6 +2,7 @@ import SwiftUI
 import Foundation
 
 struct SearchView: View {
+    @EnvironmentObject var settings: AppSettings
     @State private var query: String = ""
     @State private var isLoading = false
     @State private var errorText: String?
@@ -123,6 +124,14 @@ struct SearchView: View {
             }
             .background(Color(.systemGroupedBackground).ignoresSafeArea())
             .navigationTitle("Search")
+            .toolbar {
+                if settings.role == .caregiver {
+                    ToolbarItem(placement: .topBarLeading) {
+                        CareProfileMenu { }
+                            .environmentObject(settings)
+                    }
+                }
+            }
             .task(id: query) {
                 let trimmed = query.trimmingCharacters(in: .whitespaces)
                 guard trimmed.count >= 3 else {
