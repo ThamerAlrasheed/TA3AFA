@@ -309,7 +309,9 @@ struct SettingsView: View {
         Task {
             try? await supabase.client.auth.signOut()
             await MainActor.run {
+                PatientSessionStore.shared.clearAllSessionValuesBestEffort()
                 settings.stopActingAsPatient()
+                settings.role = .regular
                 settings.didChooseEntry = false
                 settings.onboardingCompleted = false
             }

@@ -6,166 +6,193 @@ import UIKit
 // MARK: - Broadcasts to refresh UI live when background actions change completion state
 extension Notification.Name {
     static let doseCompletionChanged = Notification.Name("doseCompletionChanged")
-    static let apptCompletionChanged = Notification.Name("apptCompletionChanged")
 }
 
-/// Persist completion ticks so notification actions can update state even when the app is backgrounded.
-enum CompletionStore {
-    private static let apptKey = "completedAppointments"
-    private static let doseKey = "completedDoses"
-
-    static func completedAppointments() -> Set<String> {
-        let arr = UserDefaults.standard.stringArray(forKey: apptKey) ?? []
-        return Set(arr)
-    }
-    static func setCompletedAppointments(_ set: Set<String>) {
-        UserDefaults.standard.set(Array(set), forKey: apptKey)
-        NotificationCenter.default.post(name: .apptCompletionChanged, object: nil)
-    }
-    static func toggleAppointment(_ id: String) {
-        var s = completedAppointments()
-        if s.contains(id) { s.remove(id) } else { s.insert(id) }
-        setCompletedAppointments(s)
-    }
-    static func markAppointmentDone(_ id: String) {
-        var s = completedAppointments()
-        s.insert(id)
-        setCompletedAppointments(s)
-    }
-
-    static func completedDoses() -> Set<String> {
-        let arr = UserDefaults.standard.stringArray(forKey: doseKey) ?? []
-        return Set(arr)
-    }
-    static func setCompletedDoses(_ set: Set<String>) {
-        UserDefaults.standard.set(Array(set), forKey: doseKey)
-        NotificationCenter.default.post(name: .doseCompletionChanged, object: nil)
-    }
-    static func toggleDose(_ id: String) {
-        var s = completedDoses()
-        if s.contains(id) { s.remove(id) } else { s.insert(id) }
-        setCompletedDoses(s)
-    }
-    static func markDoseDone(_ id: String) {
-        var s = completedDoses()
-        s.insert(id)
-        setCompletedDoses(s)
-    }
-}
-
-/// Central notifications helper + delegate for action buttons.
+@MainActor
 final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationsManager()
 
-    // Categories / action identifiers
     struct IDs {
         static let doseCategory = "DOSE_CATEGORY"
         static let apptCategory = "APPT_CATEGORY"
-
-        static let actionDoseDone = "ACTION_DOSE_DONE"
+        static let takeAction   = "TAKE_ACTION"
+        static let skipAction   = "SKIP_ACTION"
     }
 
-    // MARK: Setup (call once at app launch)
+    private override init() {
+        super.init()
+        UNUserNotificationCenter.current().delegate = self
+    }
+
     func configure() {
-        let center = UNUserNotificationCenter.current()
-        center.delegate = self
-        registerCategories(center: center)
-    }
-
-    @discardableResult
-    func requestAuthorization() async -> Bool {
-        do {
-            let ok = try await UNUserNotificationCenter.current()
-                .requestAuthorization(options: [.alert, .sound, .badge])
-            return ok
-        } catch {
-            return false
-        }
-    }
-
-    private func registerCategories(center: UNUserNotificationCenter = .current()) {
-        // Doses: include a "Took the dose" button to tick from the notification itself
-        let done = UNNotificationAction(
-            identifier: IDs.actionDoseDone,
-            title: "Took the dose",
-            options: [.authenticationRequired] // require unlock
-        )
-        let dose = UNNotificationCategory(
+        let takeAction = UNNotificationAction(identifier: IDs.takeAction, title: "Mark as Taken", options: [.foreground])
+        let skipAction = UNNotificationAction(identifier: IDs.skipAction, title: "Skip", options: [.destructive])
+        
+        let doseCategory = UNNotificationCategory(
             identifier: IDs.doseCategory,
-            actions: [done],
+            actions: [takeAction, skipAction],
             intentIdentifiers: [],
-            options: [.customDismissAction]
+            options: .customDismissAction
         )
-
-        // Appointments: read-only (no actions for now)
-        let appt = UNNotificationCategory(
+        
+        let apptCategory = UNNotificationCategory(
             identifier: IDs.apptCategory,
             actions: [],
             intentIdentifiers: [],
             options: []
         )
 
-        center.setNotificationCategories([dose, appt])
+        UNUserNotificationCenter.current().setNotificationCategories([doseCategory, apptCategory])
     }
 
-    // MARK: Scheduling / cancel
+    func requestAuthorization() async -> Bool {
+        do {
+            let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
+            return granted
+        } catch {
+            print("⚠️ Auth request failed:", error)
+            return false
+        }
+    }
 
-    /// Schedules a one-shot local notification at a specific date.
-    func schedule(
-        id: String,
-        title: String,
-        body: String,
-        at date: Date,
-        categoryId: String? = nil,
-        userInfo: [AnyHashable: Any] = [:]
-    ) {
-        // Avoid “random” feeling: only future alarms; normalize seconds to 0.
-        guard date > Date() else { return }
-
+    func schedule(id: String, title: String, body: String, at date: Date, categoryId: String? = nil, userInfo: [String: Any] = [:]) {
         let content = UNMutableNotificationContent()
         content.title = title
         content.body = body
         content.sound = .default
+        content.userInfo = userInfo
         if let cat = categoryId { content.categoryIdentifier = cat }
-        if !userInfo.isEmpty { content.userInfo = userInfo }
 
-        // Normalize seconds -> 0 to avoid minor drift
-        var comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
-        comps.second = 0
-
+        let comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
         let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
-        let req = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
-        UNUserNotificationCenter.current().add(req, withCompletionHandler: nil)
+        let request = UNNotificationRequest(identifier: id, content: content, trigger: trigger)
+
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error { print("❌ Notification failed:", error) }
+        }
     }
 
     func cancel(ids: [String]) {
         UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids)
     }
 
-    // MARK: UNUserNotificationCenterDelegate
+    // MARK: - Reminders Lifecycle
 
-    /// Handle action (button) taps or default taps on the notification.
-    func userNotificationCenter(_ center: UNUserNotificationCenter,
-                                didReceive response: UNNotificationResponse,
-                                withCompletionHandler completionHandler: @escaping () -> Void) {
-
-        let info = response.notification.request.content.userInfo
-        let action = response.actionIdentifier
-
-        // We only mark done when the explicit action button is used.
-        if action == IDs.actionDoseDone, let doseKey = info["doseKey"] as? String {
-            // Mark as done + cancel its follow-up ping
-            CompletionStore.markDoseDone(doseKey)
-            let followupId = "DOSE_FU_" + doseKey
-            self.cancel(ids: [followupId])
+    func updateReminders(for med: LocalMed) {
+        cancelReminders(for: med.id)
+        guard !med.isArchived else { return }
+        
+        let times = med.dosageTimes.compactMap { t -> DateComponents? in
+            let parts = t.split(separator: ":")
+            guard parts.count >= 2 else { return nil }
+            return DateComponents(hour: Int(parts[0]), minute: Int(parts[1]))
         }
+        
+        guard !times.isEmpty else { return }
 
-        completionHandler()
+        let cal = Calendar.current
+        let today = cal.startOfDay(for: Date())
+        
+        for dayOffset in 0..<7 {
+            guard let date = cal.date(byAdding: .day, value: dayOffset, to: today) else { continue }
+            if date < cal.startOfDay(for: med.startDate) || date > cal.startOfDay(for: med.endDate) { continue }
+
+            for (index, timeComps) in times.enumerated() {
+                guard let triggerDate = cal.date(bySettingHour: timeComps.hour ?? 0, 
+                                               minute: timeComps.minute ?? 0, 
+                                               second: 0, of: date) else { continue }
+                if triggerDate <= Date() { continue }
+
+                let notifyId = "MED_\(med.id)_\(dayOffset)_\(index)"
+                let doseKey = "\(med.id)_\(cal.startOfDay(for: triggerDate).timeIntervalSince1970)_\(index)"
+
+                schedule(
+                    id: notifyId,
+                    title: "Medication Reminder",
+                    body: "It's time to take \(med.name) (\(med.dosage))",
+                    at: triggerDate,
+                    categoryId: IDs.doseCategory,
+                    userInfo: ["medId": med.id, "doseKey": doseKey]
+                )
+            }
+        }
     }
 
-    // Make banners visible when the app is foregrounded.
+    func updateAppointmentReminders(for appt: Appointment, settings: AppSettings) {
+        cancelAppointmentReminders(for: appt.id)
+        let cal = Calendar.current
+        let t = appt.date
+        
+        if let bedDate = cal.date(bySettingHour: settings.bedtime.hour ?? 22,
+                                  minute: settings.bedtime.minute ?? 0,
+                                  second: 0,
+                                  of: cal.date(byAdding: .day, value: -1, to: t) ?? t) {
+            if bedDate > Date() {
+                schedule(
+                    id: "APPT_1D_\(appt.id)",
+                    title: "Appointment tomorrow: \(appt.titleWithEmoji)",
+                    body: t.formatted(date: .omitted, time: .shortened) + (appt.location?.isEmpty == false ? " • \(appt.location!)" : ""),
+                    at: bedDate,
+                    categoryId: IDs.apptCategory,
+                    userInfo: ["appointmentId": appt.id]
+                )
+            }
+        }
+
+        let thirtyBefore = t.addingTimeInterval(-30 * 60)
+        if thirtyBefore > Date() {
+            schedule(
+                id: "APPT_30_\(appt.id)",
+                title: "Your “\(appt.titleWithEmoji)” appointment is in 30 mins",
+                body: t.formatted(date: .omitted, time: .shortened) + (appt.location?.isEmpty == false ? " • \(appt.location!)" : ""),
+                at: thirtyBefore,
+                categoryId: IDs.apptCategory,
+                userInfo: ["appointmentId": appt.id]
+            )
+        }
+    }
+
+    func cancelReminders(for medId: String) {
+        UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
+            let ids = requests.filter { $0.identifier.hasPrefix("MED_\(medId)_") }.map { $0.identifier }
+            if !ids.isEmpty {
+                Task { @MainActor in
+                    self.cancel(ids: ids)
+                }
+            }
+        }
+    }
+
+    func cancelAppointmentReminders(for apptId: String) {
+        cancel(ids: ["APPT_1D_\(apptId)", "APPT_30_\(apptId)"])
+    }
+
+    func refreshAll(meds: [LocalMed], appts: [Appointment], settings: AppSettings) {
+        UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
+        for med in meds { updateReminders(for: med) }
+        for appt in appts { updateAppointmentReminders(for: appt, settings: settings) }
+    }
+
+    // MARK: - Delegate
+
     func userNotificationCenter(_ center: UNUserNotificationCenter,
                                 willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
         return [.banner, .sound, .list]
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                didReceive response: UNNotificationResponse,
+                                withCompletionHandler completionHandler: @escaping () -> Void) {
+        let userInfo = response.notification.request.content.userInfo
+        let action = response.actionIdentifier
+
+        if action == IDs.takeAction, let key = userInfo["doseKey"] as? String, let medId = userInfo["medId"] as? String {
+            Task { @MainActor in
+                CompletionStore.markDoseDone(key)
+                try? await SupabaseManager.shared.recordDoseEvent(medId: medId, scheduledAt: Date(), status: .taken)
+                NotificationCenter.default.post(name: .doseCompletionChanged, object: nil)
+            }
+        }
+        completionHandler()
     }
 }

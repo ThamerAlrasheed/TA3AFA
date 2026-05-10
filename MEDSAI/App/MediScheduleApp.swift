@@ -29,6 +29,12 @@ struct MediScheduleApp: App {
     /// Restore the user's session on launch.
     /// Checks Supabase Auth first, then falls back to a device-token patient session.
     private func restoreSession() async {
+        do {
+            try PatientSessionStore.shared.migrateLegacyUserDefaultsIfNeeded()
+        } catch {
+            print("Patient session migration failed: \(error.localizedDescription)")
+        }
+
         // 1) Try Supabase Auth session (regular / caregiver users)
         do {
             _ = try await SupabaseManager.shared.client.auth.session
@@ -43,8 +49,8 @@ struct MediScheduleApp: App {
         }
 
         // 2) Try device-token session (patient via care code)
-        if let deviceToken = UserDefaults.standard.string(forKey: "deviceToken"),
-           let patientId = UserDefaults.standard.string(forKey: "patientUserId"),
+        if let deviceToken = PatientSessionStore.shared.deviceToken,
+           let patientId = PatientSessionStore.shared.patientUserIDString,
            !deviceToken.isEmpty, !patientId.isEmpty {
 
             do {
@@ -72,9 +78,7 @@ struct MediScheduleApp: App {
             }
 
             // Invalid or expired token — clear everything
-            UserDefaults.standard.removeObject(forKey: "deviceToken")
-            UserDefaults.standard.removeObject(forKey: "patientUserId")
-            UserDefaults.standard.removeObject(forKey: "userRole")
+            PatientSessionStore.shared.clearAllSessionValuesBestEffort()
             settings.role = .regular
         }
 

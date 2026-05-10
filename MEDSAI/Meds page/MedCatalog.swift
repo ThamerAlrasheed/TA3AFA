@@ -35,6 +35,7 @@ final class MedCatalogRepo {
         let interactions_to_avoid: [String]?
         let what_for: [String]?
         let rxcui: String?
+        let active_ingredients: [String]?
     }
 
     static let shared = MedCatalogRepo()
@@ -129,13 +130,37 @@ final class MedCatalogRepo {
                         common_side_effects: payload.commonSideEffects,
                         interactions_to_avoid: payload.interactionsToAvoid,
                         what_for: payload.indications,
-                        rxcui: payload.rxcui
+                        rxcui: payload.rxcui,
+                        active_ingredients: payload.ingredients.isEmpty ? nil : payload.ingredients
                     )
                 )
                 .select("id")
                 .execute()
                 .value
             finalId = inserted.first?.id
+        } else if let finalId {
+            if !payload.ingredients.isEmpty {
+                struct IngredientUpdatePayload: Encodable {
+                    let rxcui: String?
+                    let active_ingredients: [String]
+                }
+
+                try? await supabase.client
+                    .from("medications")
+                    .update(IngredientUpdatePayload(rxcui: payload.rxcui, active_ingredients: payload.ingredients))
+                    .eq("id", value: finalId)
+                    .execute()
+            } else if let rxcui = payload.rxcui {
+                struct RxCUIUpdatePayload: Encodable {
+                    let rxcui: String
+                }
+
+                try? await supabase.client
+                    .from("medications")
+                    .update(RxCUIUpdatePayload(rxcui: rxcui))
+                    .eq("id", value: finalId)
+                    .execute()
+            }
         }
 
         var updatedPayload = payload

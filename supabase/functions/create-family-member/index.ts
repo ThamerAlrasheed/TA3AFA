@@ -1,4 +1,5 @@
 import { createClient } from "npm:@supabase/supabase-js@2";
+import { corsHeaders, logAudit, hashCareCode, getPepper } from "../_shared/audit-helpers.ts";
 
 type CreateFamilyMemberRequest = {
   first_name?: string;
@@ -10,12 +11,6 @@ type CreateFamilyMemberRequest = {
   can_patient_manage_calendar?: boolean;
   notify_patient_meds?: boolean;
   notify_patient_appointments?: boolean;
-};
-
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
 const supabaseUrl = Deno.env.get("SUPABASE_URL");
@@ -105,26 +100,13 @@ Deno.serve(async (req) => {
   }
 
   const caregiverId = authData.user.id;
-
-  // Limit removed as per new requirements
-  /*
-  const { count, error: countError } = await admin
-    .from("caregiver_relations")
-    .select("patient_id", { count: "exact", head: true })
-    .eq("caregiver_id", caregiverId);
-
-  if (countError) {
-    return json(500, { error: `Failed to validate caregiver capacity: ${countError.message}` });
-  }
-
-  if ((count ?? 0) >= 2) {
-    return json(409, { error: "A caregiver can manage up to 2 family members in this version." });
-  }
-  */
-
   const patientId = crypto.randomUUID();
   const code = randomCode();
-  const expiresAt = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
+  
+  // Hardening: Use peppered hash and short 10-minute expiry
+  const pepper = getPepper();
+  const codeHash = await hashCareCode(code, pepper);
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
   const { error: patientError } = await admin.from("users").insert({
     id: patientId,
@@ -155,19 +137,32 @@ Deno.serve(async (req) => {
     return json(500, { error: `Failed to create caregiver link: ${relationError.message}` });
   }
 
-  const { error: codeError } = await admin.from("care_codes").insert({
-    code,
+  const { data: codeRow, error: codeError } = await admin.from("care_codes").insert({
+    code: null, // Wipe plain code for new entries
+    code_hash: codeHash,
     patient_id: patientId,
     caregiver_id: caregiverId,
     status: "active",
     expires_at: expiresAt,
-  });
+  }).select("id").single();
 
   if (codeError) {
     await admin.from("caregiver_relations").delete().eq("patient_id", patientId);
     await admin.from("users").delete().eq("id", patientId);
     return json(500, { error: `Failed to create care code: ${codeError.message}` });
   }
+
+  // Audit Log
+  await logAudit(admin, {
+    patient_id: patientId,
+    actor_user_id: caregiverId,
+    actor_role: 'caregiver',
+    action: 'care_code_created',
+    entity_table: 'care_codes',
+    entity_id: codeRow.id,
+    metadata: { expires_at: expiresAt },
+    req
+  });
 
   await admin.from("users").update({ role: "caregiver" }).eq("id", caregiverId);
 

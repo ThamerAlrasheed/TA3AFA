@@ -86,10 +86,15 @@ final class SupabaseManager {
         let dosage: String
         let frequencyPerDay: Int
         let frequencyHours: Int?
+        let dosageTimes: [String]
+        let isPrn: Bool
+        let isManualSchedule: Bool
         let startDate: String
         let endDate: String
         let notes: String?
         let foodRule: String
+        let rxcui: String?
+        let ingredients: [String]?
 
         enum CodingKeys: String, CodingKey {
             case id
@@ -97,10 +102,15 @@ final class SupabaseManager {
             case dosage
             case frequencyPerDay = "frequency_per_day"
             case frequencyHours = "frequency_hours"
+            case dosageTimes = "dosage_times"
+            case isPrn = "is_prn"
+            case isManualSchedule = "is_manual_schedule"
             case startDate = "start_date"
             case endDate = "end_date"
             case notes
             case foodRule = "food_rule"
+            case rxcui
+            case ingredients
         }
     }
 
@@ -173,25 +183,23 @@ final class SupabaseManager {
 
     /// For patients logged in via care code (no Supabase Auth session).
     var patientUserID: UUID? {
-        guard let str = UserDefaults.standard.string(forKey: "patientUserId") else { return nil }
-        return UUID(uuidString: str)
+        PatientSessionStore.shared.patientUserID
     }
 
     var patientDeviceToken: String? {
-        UserDefaults.standard.string(forKey: "deviceToken")
+        PatientSessionStore.shared.deviceToken
     }
 
     /// The patient ID currently being managed by a caregiver.
     var activePatientID: UUID? {
         get {
-            guard let str = UserDefaults.standard.string(forKey: "activePatientId") else { return nil }
-            return UUID(uuidString: str)
+            PatientSessionStore.shared.activePatientID
         }
         set {
-            if let newValue = newValue {
-                UserDefaults.standard.set(newValue.uuidString, forKey: "activePatientId")
-            } else {
-                UserDefaults.standard.removeObject(forKey: "activePatientId")
+            do {
+                try PatientSessionStore.shared.setActivePatientID(newValue)
+            } catch {
+                print("Patient session storage failed while updating active patient: \(error.localizedDescription)")
             }
             NotificationCenter.default.post(name: NSNotification.Name("SupabaseContextChanged"), object: nil)
         }
@@ -442,10 +450,15 @@ final class SupabaseManager {
             dosage: med.dosage,
             frequencyPerDay: med.frequencyPerDay,
             frequencyHours: med.minIntervalHours,
+            dosageTimes: med.dosageTimes,
+            isPrn: med.asNeeded,
+            isManualSchedule: med.isManualSchedule,
             startDate: formatter.string(from: med.startDate),
             endDate: formatter.string(from: med.endDate),
             notes: normalizedNotes(med.notes),
-            foodRule: med.foodRule.rawValue
+            foodRule: med.foodRule.rawValue,
+            rxcui: med.rxcui,
+            ingredients: med.ingredients
         )
 
         let _: PatientMedicationFunctionResponse = try await invokePatientMedicationFunction(
@@ -561,6 +574,9 @@ final class SupabaseManager {
         )
     }
 
+    // MARK: - App Hooks
+    var onSessionExpired: (() -> Void)?
+
     private func invokePatientMedicationFunction<T: Decodable>(_ request: PatientMedicationRequest) async throws -> T {
         do {
             return try await client.functions.invoke(
@@ -570,6 +586,11 @@ final class SupabaseManager {
         } catch let error as FunctionsError {
             switch error {
             case let .httpError(code, data):
+                if code == 401 && isPatientMode {
+                    print("⚠️ Patient session revoked/expired (401).")
+                    Task { @MainActor in onSessionExpired?() }
+                }
+                
                 if let decoded = try? JSONDecoder().decode(FunctionErrorResponse.self, from: data) {
                     throw NSError(
                         domain: "SupabaseManager",
@@ -598,5 +619,48 @@ final class SupabaseManager {
         guard let notes else { return nil }
         let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    // MARK: - Dose Events
+
+    func recordDoseEvent(medId: String, scheduledAt: Date, status: DoseStatus) async throws {
+        guard let uid = currentUserID else { return }
+        guard let medUUID = UUID(uuidString: medId) else {
+            print("⚠️ Cannot record dose event: Invalid medId UUID: \(medId)")
+            return
+        }
+        
+        struct DoseEventRow: Encodable {
+            let id: UUID
+            let patient_id: UUID
+            let user_medication_id: UUID
+            let scheduled_for: String
+            let status: String
+            let taken_at: String?
+            let recorded_by: UUID
+            let source: String
+        }
+
+        let isoFmt = ISO8601DateFormatter()
+        isoFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+
+        // patient_id is always the current context's patient
+        let patientId = (isPatientMode ? patientUserID : activePatientID) ?? uid
+        
+        let row = DoseEventRow(
+            id: UUID(),
+            patient_id: patientId,
+            user_medication_id: medUUID,
+            scheduled_for: isoFmt.string(from: scheduledAt),
+            status: status.rawValue,
+            taken_at: status == .taken ? isoFmt.string(from: Date()) : nil,
+            recorded_by: uid, // The actual person logged in
+            source: isPatientMode ? "patient" : "caregiver"
+        )
+
+        try await client
+            .from("medication_dose_events")
+            .insert(row)
+            .execute()
     }
 }

@@ -102,8 +102,10 @@ struct CareCodeEntryView: View {
             do {
                 let result = try await SupabaseManager.shared.redeemCareCode(code)
 
-                UserDefaults.standard.set(result.deviceToken, forKey: "deviceToken")
-                UserDefaults.standard.set(result.patientID, forKey: "patientUserId")
+                try PatientSessionStore.shared.savePatientSession(
+                    patientID: result.patientID,
+                    deviceToken: result.deviceToken
+                )
 
                 await MainActor.run {
                     isLoading = false

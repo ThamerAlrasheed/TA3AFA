@@ -12,6 +12,10 @@ final class UserMedsRepo: ObservableObject {
         let dosage: String
         let frequency_per_day: Int
         let frequency_hours: Int?
+        let food_rule: String
+        let dosage_times: [String]?
+        let is_prn: Bool
+        let is_manual_schedule: Bool
         let start_date: String
         let end_date: String
         let notes: String?
@@ -30,6 +34,9 @@ final class UserMedsRepo: ObservableObject {
     @Published private(set) var canManageCalendar = true
     @Published private(set) var notifyMeds = true
     @Published private(set) var notifyAppointments = true
+    @Published private(set) var safetyWarningsByMedID: [String: [SafetyWarning]] = [:]
+    @Published private(set) var safetySourceTrace: [String] = []
+    @Published private(set) var isRefreshingSafetyWarnings = false
 
     private var supabase: SupabaseManager { .shared }
     private var cancellables = Set<AnyCancellable>()
@@ -37,6 +44,14 @@ final class UserMedsRepo: ObservableObject {
     init() {
         NotificationCenter.default.publisher(for: NSNotification.Name("SupabaseContextChanged"))
             .sink { [weak self] _ in Task { await self?.fetchMeds() } }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: NSNotification.Name("UserRoutineChanged"))
+            .sink { [weak self] _ in self?.refreshAllReminders() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: .medicalProfileChanged)
+            .sink { [weak self] _ in Task { await self?.refreshSafetyWarnings() } }
             .store(in: &cancellables)
     }
 
@@ -57,8 +72,10 @@ final class UserMedsRepo: ObservableObject {
                 self.canManageCalendar = context.canManageCalendar
                 self.notifyMeds = context.notifyMeds
                 self.notifyAppointments = context.notifyAppointments
-                self.meds = context.medications.compactMap { LocalMed(row: $0) }
+                let loadedMeds = context.medications.compactMap { LocalMed(row: $0) }
+                self.meds = loadedMeds
                 isLoading = false
+                await refreshSafetyWarnings(for: loadedMeds)
                 return
             }
 
@@ -101,18 +118,93 @@ final class UserMedsRepo: ObservableObject {
             let rows: [LocalMed.DBRow] = try await self.supabase.retry {
                 try await self.supabase.client
                     .from("user_medications")
-                    .select("*, medications(name, food_rule)")
+                    .select("*, medications(name, food_rule, rxcui, active_ingredients)")
                     .eq("user_id", value: uidString)
                     .eq("is_active", value: true)
                     .execute()
                     .value
             }
-            self.meds = rows.compactMap { LocalMed(row: $0) }
+            let loadedMeds = rows.compactMap { LocalMed(row: $0) }
+            self.meds = loadedMeds
+            await refreshSafetyWarnings(for: loadedMeds)
         } catch {
             print("⚠️ fetchMeds failed for \(uidString):", error)
             errorMessage = "Unable to fetch medications (\(error.localizedDescription))."
         }
         isLoading = false
+    }
+
+    func safetyWarnings(for med: LocalMed) -> [SafetyWarning] {
+        safetyWarningsByMedID[med.id] ?? []
+    }
+
+    func refreshSafetyWarnings() async {
+        await refreshSafetyWarnings(for: meds)
+    }
+
+    private func refreshSafetyWarnings(for meds: [LocalMed]) async {
+        guard !meds.isEmpty else {
+            safetyWarningsByMedID = [:]
+            safetySourceTrace = []
+            return
+        }
+
+        let inputs = meds.map {
+            SafetyMedicationInput(
+                id: $0.id,
+                name: $0.name,
+                rxcui: $0.rxcui,
+                ingredients: $0.ingredients ?? []
+            )
+        }
+
+        isRefreshingSafetyWarnings = true
+        defer { isRefreshingSafetyWarnings = false }
+
+        do {
+            let response = try await DrugInfo.checkSafety(
+                patientId: supabase.currentUserID?.uuidString.lowercased(),
+                deviceToken: supabase.patientDeviceToken,
+                medications: inputs,
+                lang: "English"
+            )
+
+            safetySourceTrace = response.source_trace
+            safetyWarningsByMedID = Self.mapWarnings(response.warnings, to: meds)
+        } catch {
+            print("⚠️ refresh safety warnings failed:", error)
+            safetyWarningsByMedID = [:]
+            safetySourceTrace = []
+        }
+    }
+
+    private static func mapWarnings(_ warnings: [SafetyWarning], to meds: [LocalMed]) -> [String: [SafetyWarning]] {
+        var mapped: [String: [SafetyWarning]] = [:]
+
+        for warning in warnings {
+            for med in meds where warningApplies(warning, to: med) {
+                mapped[med.id, default: []].append(warning)
+            }
+        }
+
+        return mapped.mapValues { SafetyWarningPresentation.sorted($0) }
+    }
+
+    private static func warningApplies(_ warning: SafetyWarning, to med: LocalMed) -> Bool {
+        if warning.affected_medication_ids?.contains(med.id) == true { return true }
+
+        let medName = normalize(med.name)
+        let warningMeds = warning.meds.map(normalize)
+        if warningMeds.contains(medName) { return true }
+        if warningMeds.contains(where: { !$0.isEmpty && (medName.contains($0) || $0.contains(medName)) }) { return true }
+
+        let medIngredients = (med.ingredients ?? []).map(normalize)
+        let warningIngredients = warning.ingredients.map(normalize)
+        return !Set(medIngredients).isDisjoint(with: Set(warningIngredients))
+    }
+
+    private static func normalize(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     // MARK: - CRUD
@@ -145,9 +237,9 @@ final class UserMedsRepo: ObservableObject {
                     title: med.name,
                     strengths: [],
                     dosageForms: [],
-                    foodRule: "none",
+                    foodRule: med.foodRule.rawValue,
                     minIntervalHours: nil,
-                    ingredients: [],
+                    ingredients: med.ingredients ?? [],
                     indications: [],
                     howToTake: [],
                     commonSideEffects: [],
@@ -155,7 +247,7 @@ final class UserMedsRepo: ObservableObject {
                     interactionsToAvoid: [],
                     references: nil,
                     kbKey: nil,
-                    rxcui: nil,
+                    rxcui: med.rxcui,
                     id: nil
                 )
                 
@@ -182,6 +274,10 @@ final class UserMedsRepo: ObservableObject {
                 dosage: med.dosage,
                 frequency_per_day: med.frequencyPerDay,
                 frequency_hours: med.minIntervalHours,
+                food_rule: med.foodRule.rawValue,
+                dosage_times: med.dosageTimes.isEmpty ? nil : med.dosageTimes,
+                is_prn: med.asNeeded,
+                is_manual_schedule: med.isManualSchedule,
                 start_date: isoFmt.string(from: med.startDate),
                 end_date: isoFmt.string(from: med.endDate),
                 notes: normalizedNotes(med.notes),
@@ -193,6 +289,7 @@ final class UserMedsRepo: ObservableObject {
                 .upsert(row)
                 .execute()
 
+            NotificationsManager.shared.updateReminders(for: med)
             await fetchMeds()
         } catch {
             print("⚠️ add med failed:", error)
@@ -204,6 +301,7 @@ final class UserMedsRepo: ObservableObject {
 
     func delete(_ med: LocalMed) async {
         do {
+            NotificationsManager.shared.cancelReminders(for: med.id)
             if supabase.isPatientMode || supabase.activePatientID != nil {
                 try await supabase.deletePatientMedication(id: med.id)
                 await fetchMeds()
@@ -223,6 +321,12 @@ final class UserMedsRepo: ObservableObject {
 
     func setArchived(_ med: LocalMed, archived: Bool) async {
         do {
+            if archived {
+                NotificationsManager.shared.cancelReminders(for: med.id)
+            } else {
+                NotificationsManager.shared.updateReminders(for: med)
+            }
+
             if supabase.isPatientMode || supabase.activePatientID != nil {
                 try await supabase.archivePatientMedication(id: med.id, archived: archived)
                 await fetchMeds()
@@ -240,9 +344,59 @@ final class UserMedsRepo: ObservableObject {
         }
     }
 
+    @MainActor
+    func refreshAllReminders() {
+        let settings = AppSettings.shared
+        
+        Task {
+            for med in meds {
+                if !med.isArchived {
+                    var currentMed = med
+                    
+                    // 1. If NOT manual, recalculate dosageTimes based on new routine
+                    if !med.isManualSchedule {
+                        let tempMed = Medication(
+                            id: med.id,
+                            name: med.name,
+                            dosage: med.dosage,
+                            frequencyPerDay: med.frequencyPerDay,
+                            startDate: med.startDate,
+                            endDate: med.endDate,
+                            foodRule: med.foodRule,
+                            notes: med.notes,
+                            ingredients: med.ingredients,
+                            minIntervalHours: med.minIntervalHours,
+                            rxcui: med.rxcui,
+                            dosageTimes: nil, // force recalc
+                            asNeeded: med.asNeeded,
+                            isManualSchedule: med.isManualSchedule
+                        )
+                        
+                        let newTimes = Scheduler.preferredTimes(for: tempMed, on: Date().startOfDay, settings: settings)
+                        let timeFmt = DateFormatter()
+                        timeFmt.dateFormat = "HH:mm:ss"
+                        let timesStrings = newTimes.map { timeFmt.string(from: $0) }
+                        
+                        currentMed.dosageTimes = timesStrings
+                        
+                        // Persist to Supabase
+                        await add(currentMed)
+                    }
+                    
+                    // 2. Update local notifications
+                    NotificationsManager.shared.updateReminders(for: currentMed)
+                }
+            }
+        }
+    }
+
     private func normalizedNotes(_ notes: String?) -> String? {
         guard let notes else { return nil }
         let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
+}
+
+extension Notification.Name {
+    static let medicalProfileChanged = Notification.Name("MedicalProfileChanged")
 }

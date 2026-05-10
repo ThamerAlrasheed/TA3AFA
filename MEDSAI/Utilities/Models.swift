@@ -2,13 +2,27 @@ import SwiftUI
 import SwiftData
 
 enum FoodRule: String, Codable, CaseIterable, Identifiable {
-    case beforeFood, afterFood, none
+    case beforeFood, afterFood, withFood, none
     var id: String { rawValue }
     var label: String {
         switch self {
         case .beforeFood: return "Before food"
         case .afterFood:  return "After food"
+        case .withFood:   return "With food"
         case .none:       return "No food rule"
+        }
+    }
+
+    static func fromStorage(_ value: String?) -> FoodRule {
+        let normalized = (value ?? "none")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .replacingOccurrences(of: "_", with: "")
+        switch normalized {
+        case "beforefood": return .beforeFood
+        case "afterfood": return .afterFood
+        case "withfood": return .withFood
+        default: return .none
         }
     }
 }
@@ -40,6 +54,10 @@ final class Medication {
     // NEW:
     var ingredients: [String]?        // e.g., ["metformin hydrochloride"]
     var minIntervalHours: Int?        // e.g., 12 (q12h)
+    var rxcui: String?
+    var dosageTimes: [String]?        // e.g., ["08:00:00"]
+    var asNeeded: Bool = false
+    var isManualSchedule: Bool = false
 
     init(id: String = UUID().uuidString,
          name: String,
@@ -50,14 +68,22 @@ final class Medication {
          foodRule: FoodRule = .none,
          notes: String? = nil,
          ingredients: [String]? = nil,
-         minIntervalHours: Int? = nil) {
+         minIntervalHours: Int? = nil,
+         rxcui: String? = nil,
+         dosageTimes: [String]? = nil,
+         asNeeded: Bool = false,
+         isManualSchedule: Bool = false) {
         self.id = id; self.name = name; self.dosage = dosage
         self.frequencyPerDay = frequencyPerDay
         self.startDate = startDate; self.endDate = endDate
         self.foodRule = foodRule; self.notes = notes
         self.ingredients = ingredients
         self.minIntervalHours = minIntervalHours
+        self.rxcui = rxcui
+        self.dosageTimes = dosageTimes
+        self.asNeeded = asNeeded
+        self.isManualSchedule = isManualSchedule
     }
 }
 
-enum DoseStatus: String, Codable { case scheduled, taken, missed }
+enum DoseStatus: String, Codable { case scheduled, taken, skipped, missed }

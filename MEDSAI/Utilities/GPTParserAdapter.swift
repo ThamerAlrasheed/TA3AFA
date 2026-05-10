@@ -24,8 +24,9 @@ extension DrugPayload {
     var quickChips: [String] {
         var chips: [String] = []
         switch foodRuleEnum {
-        case .afterFood: chips.append("Take after food")
+        case .afterFood:  chips.append("Take after food")
         case .beforeFood: chips.append("Take before food")
+        case .withFood:   chips.append("Take with food")
         case .none: break
         }
         if let h = minIntervalHours { chips.append("~every \(h)h") }

@@ -253,7 +253,9 @@ struct SchedulePageView: View {
                 foodRule: m.foodRule,
                 notes: m.notes,
                 ingredients: m.ingredients,
-                minIntervalHours: m.minIntervalHours
+                minIntervalHours: m.minIntervalHours,
+                rxcui: m.rxcui,
+                dosageTimes: m.dosageTimes
             )
         }
 
@@ -283,6 +285,7 @@ struct SchedulePageView: View {
         switch rule {
         case .beforeFood: return "Before food"
         case .afterFood:  return "After food"
+        case .withFood:   return "With food"
         case .none:       return "No food rule"
         }
     }

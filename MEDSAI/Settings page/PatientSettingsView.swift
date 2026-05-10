@@ -36,6 +36,26 @@ struct PatientSettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+
+                Section(header: Text("Management")) {
+                    if let pid = settings.activePatientID {
+                        NavigationLink(destination: LinkedDevicesView(patientId: pid, patientName: settings.activePatientName ?? "Patient")) {
+                            HStack {
+                                Image(systemName: "iphone.badge.checkmark")
+                                    .foregroundStyle(.blue)
+                                Text("Linked Devices")
+                            }
+                        }
+                    }
+                    
+                    NavigationLink(destination: MedicalProfileView(patientId: settings.activePatientID, patientName: settings.activeCareDisplayName)) {
+                        HStack {
+                            Image(systemName: "medical.sheet.fill")
+                                .foregroundStyle(.red)
+                            Text("Medical Profile")
+                        }
+                    }
+                }
                 
                 Section {
                     Button(role: .destructive) {
@@ -58,9 +78,7 @@ struct PatientSettingsView: View {
     
     private func disconnect() {
         // Clear session
-        UserDefaults.standard.removeObject(forKey: "deviceToken")
-        UserDefaults.standard.removeObject(forKey: "patientUserId")
-        UserDefaults.standard.removeObject(forKey: "userRole")
+        PatientSessionStore.shared.clearAllSessionValuesBestEffort()
         
         // Reset app state
         settings.role = .regular

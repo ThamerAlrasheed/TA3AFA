@@ -2,6 +2,35 @@ import SwiftUI
 import Foundation
 import UserNotifications
 
+// MARK: - Completion Store (Local persistence for Today's progress)
+
+enum CompletionStore {
+    private static let dosesKey = "completedDoseKeys"
+    private static let apptsKey = "completedAppointments"
+
+    static func completedDoses() -> Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: dosesKey) ?? [])
+    }
+
+    static func setCompletedDoses(_ set: Set<String>) {
+        UserDefaults.standard.set(Array(set), forKey: dosesKey)
+    }
+
+    static func markDoseDone(_ key: String) {
+        var set = completedDoses()
+        set.insert(key)
+        setCompletedDoses(set)
+    }
+
+    static func completedAppointments() -> Set<String> {
+        Set(UserDefaults.standard.stringArray(forKey: apptsKey) ?? [])
+    }
+
+    static func setCompletedAppointments(_ set: Set<String>) {
+        UserDefaults.standard.set(Array(set), forKey: apptsKey)
+    }
+}
+
 // MARK: - Small utilities
 
 extension Date {
@@ -44,14 +73,12 @@ func formatDosage(amount: Double, unit: DosageUnit) -> String {
 enum Scheduler {
 
     // Tunables
-    private static let afterFoodMinutes  = 30
-    private static let beforeFoodMinutes = -45
+    private static let mealOffsetMinutes: Int = 15
+    private static let wakeUpBufferMinutes: Int = 15
+    private static let bedtimeBufferMinutes: Int = 15
+    
     private static let defaultMinGapSec: TimeInterval = 15 * 60
     private static let mergeWindowSec: TimeInterval   = 10 * 60
-
-    private static let normalAfterWakePadMin: Int = 15
-    private static let normalBeforeBedPadMin: Int = 15
-    private static let edgeEqualityLeewaySec: TimeInterval = 120
 
     static func buildAdherenceSchedule(
         meds: [Medication],
@@ -90,10 +117,21 @@ enum Scheduler {
             .flatMap { slot in slot.meds.map { (slot.time, $0) } }
     }
 
-    // MARK: Preferred anchors (per med)
+    // MARK: - Preferred anchors (per med)
 
-    private static func preferredTimes(for med: Medication, on startOfDay: Date, settings: AppSettings) -> [Date] {
+    static func preferredTimes(for med: Medication, on startOfDay: Date, settings: AppSettings) -> [Date] {
         let cal = Calendar.current
+
+        // 0. Use explicit dosageTimes if provided (User override)
+        if let explicit = med.dosageTimes, !explicit.isEmpty {
+            return explicit.compactMap { t -> Date? in
+                let parts = t.split(separator: ":")
+                guard parts.count >= 2 else { return nil }
+                let h = Int(parts[0]) ?? 0
+                let m = Int(parts[1]) ?? 0
+                return cal.date(bySettingHour: h, minute: m, second: 0, of: startOfDay)
+            }
+        }
 
         func time(_ comps: DateComponents) -> Date {
             cal.date(bySettingHour: comps.hour ?? 9, minute: comps.minute ?? 0, second: 0, of: startOfDay)!
@@ -117,21 +155,19 @@ enum Scheduler {
             return date
         }
 
+        if let interval = med.minIntervalHours, interval > 0 && med.frequencyPerDay > 1 {
+            let raw = evenlySpaced(
+                count: med.frequencyPerDay,
+                from: wake.addingTimeInterval(TimeInterval(wakeUpBufferMinutes * 60)),
+                to: bed.addingTimeInterval(TimeInterval(-bedtimeBufferMinutes * 60)),
+                minSpacingHours: interval
+            )
+            return raw.map(clampInsideAwake)
+        }
+
         switch med.foodRule {
         case .afterFood:
-            var anchors: [Date]
-            switch med.frequencyPerDay {
-            case 1:  anchors = [dinner]
-            case 2:  anchors = [breakfast, dinner]
-            case 3:  anchors = [breakfast, lunch, dinner]
-            default: anchors = [breakfast, lunch, dinner, bed]
-            }
-            return Array(anchors.prefix(med.frequencyPerDay))
-                .map { shift($0, minutes: afterFoodMinutes) }
-                .map(clampInsideAwake)
-
-        case .beforeFood:
-            var anchors: [Date]
+            let anchors: [Date]
             switch med.frequencyPerDay {
             case 1:  anchors = [breakfast]
             case 2:  anchors = [breakfast, dinner]
@@ -139,41 +175,59 @@ enum Scheduler {
             default: anchors = [breakfast, lunch, dinner, bed]
             }
             return Array(anchors.prefix(med.frequencyPerDay))
-                .map { shift($0, minutes: beforeFoodMinutes) }
+                .map { shift($0, minutes: mealOffsetMinutes) }
+                .map(clampInsideAwake)
+
+        case .beforeFood:
+            let anchors: [Date]
+            switch med.frequencyPerDay {
+            case 1:  anchors = [breakfast]
+            case 2:  anchors = [breakfast, dinner]
+            case 3:  anchors = [breakfast, lunch, dinner]
+            default: anchors = [breakfast, lunch, dinner, bed]
+            }
+            return Array(anchors.prefix(med.frequencyPerDay))
+                .map { shift($0, minutes: -mealOffsetMinutes) }
+                .map(clampInsideAwake)
+
+        case .withFood:
+            let anchors: [Date]
+            switch med.frequencyPerDay {
+            case 1:  anchors = [breakfast]
+            case 2:  anchors = [breakfast, dinner]
+            case 3:  anchors = [breakfast, lunch, dinner]
+            default: anchors = [breakfast, lunch, dinner, bed]
+            }
+            return Array(anchors.prefix(med.frequencyPerDay))
                 .map(clampInsideAwake)
 
         case .none:
-            let raw = evenlySpaced(
-                count: med.frequencyPerDay,
-                from: wake,
-                to: bed,
-                minSpacingHours: med.minIntervalHours
-            )
-
-            let nudged = raw.map { t -> Date in
-                var out = t
-                if abs(t.timeIntervalSince(wake)) <= edgeEqualityLeewaySec {
-                    out = wake.addingTimeInterval(TimeInterval(normalAfterWakePadMin * 60))
-                } else if abs(t.timeIntervalSince(bed)) <= edgeEqualityLeewaySec {
-                    out = bed.addingTimeInterval(TimeInterval(-normalBeforeBedPadMin * 60))
-                }
-                return clampInsideAwake(out)
+            var anchors: [Date]
+            switch med.frequencyPerDay {
+            case 1: anchors = [shift(wake, minutes: wakeUpBufferMinutes)]
+            case 2: anchors = [shift(wake, minutes: wakeUpBufferMinutes), shift(bed, minutes: -bedtimeBufferMinutes)]
+            case 3: anchors = [breakfast, lunch, dinner]
+            default:
+                anchors = evenlySpaced(
+                    count: med.frequencyPerDay,
+                    from: wake.addingTimeInterval(TimeInterval(wakeUpBufferMinutes * 60)),
+                    to: bed.addingTimeInterval(TimeInterval(-bedtimeBufferMinutes * 60)),
+                    minSpacingHours: nil
+                )
             }
-            return nudged
+            return anchors.map(clampInsideAwake)
         }
     }
 
     private static func evenlySpaced(count: Int, from start: Date, to end: Date, minSpacingHours: Int?) -> [Date] {
         guard count > 0 else { return [] }
         if count == 1 { return [start] }
-        let total = end.timeIntervalSince(start)
-        var step  = total / Double(count - 1)
-        if let minH = minSpacingHours { step = max(step, Double(minH) * 3600) }
-
+        let totalWindow = end.timeIntervalSince(start)
+        let step = totalWindow / Double(count - 1)
         var out: [Date] = []
         var cursor = start
         out.append(cursor)
-        for _ in 1..<(count) {
+        for _ in 1..<count {
             cursor = cursor.addingTimeInterval(step)
             if let last = out.last, let minH = minSpacingHours {
                 let needed = last.addingTimeInterval(Double(minH) * 3600)
@@ -184,8 +238,6 @@ enum Scheduler {
         }
         return out
     }
-
-    // MARK: Slotting / grouping
 
     private static func bestSlotIndex(for dose: (Date, Medication),
                                       in slots: [(time: Date, meds: [Medication])]) -> Int? {
@@ -201,7 +253,7 @@ enum Scheduler {
     }
 
     private static func canCoSchedule(_ a: Medication, _ b: Medication) -> Bool {
-        let conflicts = InteractionEngine.checkConflicts(
+        let conflicts = InteractionEngine.checkConflictsLegacy(
             meds: [(a.name, a.ingredients ?? []), (b.name, b.ingredients ?? [])]
         )
         let hasAvoid   = conflicts.contains { if case .avoid = $0.kind { return true } else { return false } }
@@ -224,7 +276,7 @@ enum Scheduler {
                 var hasAvoid = false
                 for ma in a.meds {
                     for mb in b.meds {
-                        let conflicts = InteractionEngine.checkConflicts(
+                        let conflicts = InteractionEngine.checkConflictsLegacy(
                             meds: [(ma.name, ma.ingredients ?? []), (mb.name, mb.ingredients ?? [])]
                         )
                         if conflicts.contains(where: { if case .avoid = $0.kind { return true } else { return false } }) {

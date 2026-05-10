@@ -36,15 +36,6 @@ struct TodayScheduleView: View {
                 Section {
                     dosesSection
                 }
-
-                // MARK: Notifications helper row (debug/visibility)
-                Section {
-                    Button("Reschedule Notifications for Today") {
-                        Task { await scheduleNotificationsForToday() }
-                    }
-                } footer: {
-                    Text("Appointments: a day before and 30 min before. Doses: at time; follow-up in 15 minutes if not ticked.")
-                }
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Today")
@@ -72,39 +63,27 @@ struct TodayScheduleView: View {
 
                 Task {
                     await NotificationsManager.shared.requestAuthorization()
-                    await scheduleNotificationsForToday()
                 }
             }
             .onChange(of: medsRepo.meds) { _, _ in
                 recomputeDoses()
-                Task { await scheduleNotificationsForToday() }
             }
             .onChange(of: settings.activePatientID) { _, _ in
                 medsRepo.start()
                 apptsRepo.start()
                 recomputeDoses()
             }
-            .onChange(of: settings.breakfast) { _, _ in reactToSettings() }
-            .onChange(of: settings.lunch)     { _, _ in reactToSettings() }
-            .onChange(of: settings.dinner)    { _, _ in reactToSettings() }
-            .onChange(of: settings.bedtime)   { _, _ in reactToSettings() }
-            .onChange(of: settings.wakeup)    { _, _ in reactToSettings() }
-
-            // 🔔 NEW: live-refresh when a notification action marks dose done in background
-            .onReceive(NotificationCenter.default.publisher(for: .doseCompletionChanged)) { _ in
-                completedDoseKeys = CompletionStore.completedDoses()
-            }
+            .onChange(of: settings.breakfast) { _, _ in recomputeDoses() }
+            .onChange(of: settings.lunch)     { _, _ in recomputeDoses() }
+            .onChange(of: settings.dinner)    { _, _ in recomputeDoses() }
+            .onChange(of: settings.bedtime)   { _, _ in recomputeDoses() }
+            .onChange(of: settings.wakeup)    { _, _ in recomputeDoses() }
 
             .sheet(item: $viewingAppointment) { appt in
                 AppointmentDetailSheet(appointment: appt)
                     .presentationDetents([.medium, .large])
             }
         }
-    }
-
-    private func reactToSettings() {
-        recomputeDoses()
-        Task { await scheduleNotificationsForToday() }
     }
 
     // MARK: - Appointments UI
@@ -163,14 +142,23 @@ struct TodayScheduleView: View {
                     subtitle: "\(med.dosage) • \(med.frequencyPerDay)x/day • \(med.foodRule.label)",
                     timeText: time.formatted(date: .omitted, time: .shortened),
                     toggle: {
-                        toggleDose(key)
+                        toggleDose(key, medID: med.id, time: time)
                         NotificationsManager.shared.cancel(ids: ["DOSE_FU_\(key)"])
                     },
                     onTap: {
-                        toggleDose(key)
+                        toggleDose(key, medID: med.id, time: time)
                         NotificationsManager.shared.cancel(ids: ["DOSE_FU_\(key)"])
                     }
                 )
+                .contextMenu {
+                    if !completedDoseKeys.contains(key) {
+                        Button {
+                            markAsSkipped(key, medID: med.id, time: time)
+                        } label: {
+                            Label("Skip Dose", systemImage: "xmark.circle")
+                        }
+                    }
+                }
             }
         }
     }
@@ -217,12 +205,18 @@ struct TodayScheduleView: View {
                 foodRule: m.foodRule,
                 notes: m.notes,
                 ingredients: m.ingredients,
-                minIntervalHours: m.minIntervalHours
+                minIntervalHours: m.minIntervalHours,
+                rxcui: m.rxcui,
+                dosageTimes: m.dosageTimes,
+                asNeeded: m.asNeeded
             )
         }
 
+        // Filter out asNeeded for automatic adherence schedule generation
+        let scheduled = adapted.filter { !$0.asNeeded }
+
         let pairs = Scheduler.buildAdherenceSchedule(
-            meds: adapted,
+            meds: scheduled,
             settings: settings,
             date: dayStart
         )
@@ -233,99 +227,6 @@ struct TodayScheduleView: View {
             .filter { (t, _) in t >= dayStart && t < nextWake }
             .compactMap { (t, med) in byId[med.id].map { (t, $0) } }
             .sorted { $0.0 < $1.0 }
-    }
-
-    // MARK: - Notifications (for *today*)
-
-    private func scheduleNotificationsForToday() async {
-        _ = await NotificationsManager.shared.requestAuthorization()
-
-        let idsToCancel = buildAllNotificationIDsForToday()
-        NotificationsManager.shared.cancel(ids: idsToCancel)
-
-        // Only schedule if notifications are allowed for this context
-        // If I am the caregiver acting as a patient, I always get them.
-        // If I am the patient, I must respect the caregiver's toggles.
-        let isImpersonating = settings.activePatientID != nil
-        let canNotifyAppts = isImpersonating || medsRepo.notifyAppointments
-        let canNotifyMeds = isImpersonating || medsRepo.notifyMeds
-
-        // Appointments
-        if canNotifyAppts {
-            let appts = apptsRepo.appointments(on: today)
-            for appt in appts {
-                let t = appt.date
-                // 1) Day before at bedtime
-                if let bed = Calendar.current.date(bySettingHour: settings.bedtime.hour ?? 22,
-                                                   minute: settings.bedtime.minute ?? 0,
-                                                   second: 0,
-                                                   of: Calendar.current.date(byAdding: .day, value: -1, to: t) ?? t) {
-                    NotificationsManager.shared.schedule(
-                        id: "APPT_1D_\(appt.id)",
-                        title: "Appointment tomorrow: \(appt.titleWithEmoji)",
-                        body: timeOnly(t) + (appt.location?.isEmpty == false ? " • \(appt.location!)" : ""),
-                        at: bed,
-                        categoryId: NotificationsManager.IDs.apptCategory,
-                        userInfo: ["appointmentId": appt.id]
-                    )
-                }
-
-                // 2) Thirty minutes before
-                let thirtyBefore = t.addingTimeInterval(-30 * 60)
-                NotificationsManager.shared.schedule(
-                    id: "APPT_30_\(appt.id)",
-                    title: "Your “\(appt.titleWithEmoji)” appointment is in 30 mins",
-                    body: timeOnly(t) + (appt.location?.isEmpty == false ? " • \(appt.location!)" : ""),
-                    at: thirtyBefore,
-                    categoryId: NotificationsManager.IDs.apptCategory,
-                    userInfo: ["appointmentId": appt.id]
-                )
-            }
-        }
-
-        // Doses
-        if canNotifyMeds {
-            for (time, med) in todaysDoses {
-                let key = doseKey(time: time, medID: med.id)
-                let title = "Time to take \(med.name)"
-                let body = "\(med.dosage) • \(foodRuleLabel(med.foodRule))"
-
-                NotificationsManager.shared.schedule(
-                    id: "DOSE_\(key)",
-                    title: title,
-                    body: body,
-                    at: time,
-                    categoryId: NotificationsManager.IDs.doseCategory,
-                    userInfo: ["doseKey": key]
-                )
-
-                if !completedDoseKeys.contains(key) {
-                    let fu = time.addingTimeInterval(15 * 60)
-                    NotificationsManager.shared.schedule(
-                        id: "DOSE_FU_\(key)",
-                        title: "Did you take your med?",
-                        body: "\(med.name) — \(med.dosage)",
-                        at: fu,
-                        categoryId: NotificationsManager.IDs.doseCategory,
-                        userInfo: ["doseKey": key]
-                    )
-                }
-            }
-        }
-    }
-
-    private func buildAllNotificationIDsForToday() -> [String] {
-        var ids: [String] = []
-        for appt in apptsRepo.appointments(on: today) {
-            ids.append("APPT_1D_\(appt.id)")
-            ids.append("APPT_30_\(appt.id)")
-        }
-        for (time, med) in todaysDoses {
-            let key = doseKey(time: time, medID: med.id)
-            ids.append("DOSE_\(key)")
-            ids.append("DOSE_FU_\(key)")
-        }
-        return ids
     }
 
     // MARK: - Completion toggles
@@ -339,13 +240,48 @@ struct TodayScheduleView: View {
         CompletionStore.setCompletedAppointments(completedAppointments)
     }
 
-    private func toggleDose(_ key: String) {
+    private func toggleDose(_ key: String, medID: String, time: Date) {
+        let isDone: Bool
         if completedDoseKeys.contains(key) {
             completedDoseKeys.remove(key)
+            isDone = false
         } else {
             completedDoseKeys.insert(key)
+            isDone = true
         }
         CompletionStore.setCompletedDoses(completedDoseKeys)
+        
+        // Sync to Supabase
+        if isDone {
+            Task {
+                do {
+                    try await SupabaseManager.shared.recordDoseEvent(
+                        medId: medID,
+                        scheduledAt: time,
+                        status: .taken
+                    )
+                } catch {
+                    print("⚠️ Failed to sync dose event:", error)
+                }
+            }
+        }
+    }
+
+    private func markAsSkipped(_ key: String, medID: String, time: Date) {
+        completedDoseKeys.insert(key)
+        CompletionStore.setCompletedDoses(completedDoseKeys)
+        
+        Task {
+            do {
+                try await SupabaseManager.shared.recordDoseEvent(
+                    medId: medID,
+                    scheduledAt: time,
+                    status: .skipped
+                )
+            } catch {
+                print("⚠️ Failed to sync skipped event:", error)
+            }
+        }
     }
 
     // MARK: - Helpers
@@ -368,6 +304,7 @@ struct TodayScheduleView: View {
         switch rule {
         case .beforeFood: return "Before food"
         case .afterFood:  return "After food"
+        case .withFood:   return "With food"
         case .none:       return "No food rule"
         }
     }

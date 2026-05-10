@@ -12,6 +12,16 @@ struct RootView: View {
             }
         }
         .animation(.default, value: shouldShowMainApp)
+        .alert("Access Revoked", isPresented: Binding(
+            get: { settings.sessionRevokedMessage != nil },
+            set: { if !$0 { settings.sessionRevokedMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let msg = settings.sessionRevokedMessage {
+                Text(msg)
+            }
+        }
     }
 
     private var shouldShowMainApp: Bool {

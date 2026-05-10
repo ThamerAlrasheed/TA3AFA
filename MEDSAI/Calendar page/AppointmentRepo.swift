@@ -60,6 +60,11 @@ final class AppointmentsRepo: ObservableObject {
                     .value
             }
             self.items = rows.map { $0.toAppointment() }
+            
+            // Sync Reminders
+            for item in self.items {
+                NotificationsManager.shared.updateAppointmentReminders(for: item, settings: AppSettings.shared)
+            }
         } catch {
             print("⚠️ fetchAppointments failed for \(uidString):", error)
             errorMessage = error.localizedDescription
@@ -165,6 +170,13 @@ final class AppointmentsRepo: ObservableObject {
             await fetchAppointments()
         } catch {
             self.errorMessage = error.localizedDescription
+        }
+    }
+
+    @MainActor
+    func refreshAllReminders() {
+        for item in items {
+            NotificationsManager.shared.updateAppointmentReminders(for: item, settings: AppSettings.shared)
         }
     }
 

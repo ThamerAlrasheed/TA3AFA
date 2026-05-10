@@ -21,16 +21,25 @@ struct InteractionConflict: Identifiable {
 }
 
 enum InteractionEngine {
+    static var areRulesMissing = false
+
     static var rules: InteractionRules = {
         guard let url = Bundle.main.url(forResource: "InteractionRules", withExtension: "json"),
               let data = try? Data(contentsOf: url),
               let decoded = try? JSONDecoder().decode(InteractionRules.self, from: data) else {
+            areRulesMissing = true
             return InteractionRules(classes: [:], aliases: [:])
         }
+        if decoded.classes.isEmpty { areRulesMissing = true }
         return decoded
     }()
 
-    static func checkConflicts(meds: [(name: String, ingredients: [String])]) -> [InteractionConflict] {
+    struct CheckResult {
+        let conflicts: [InteractionConflict]
+        let warningMessage: String?
+    }
+
+    static func checkConflicts(meds: [(name: String, ingredients: [String])]) -> CheckResult {
         var conflicts: [InteractionConflict] = []
         let list = meds.map { ($0.name.lowercased(), $0.ingredients.map{$0.lowercased()}) }
         for i in 0..<list.count {
@@ -42,7 +51,15 @@ enum InteractionEngine {
                 conflicts += conflictsBetween(aName: b.0, aClasses: bClasses, bName: a.0, bIngredients: a.1)
             }
         }
-        return dedupe(conflicts)
+        
+        let deduped = dedupe(conflicts)
+        let msg = areRulesMissing ? "Offline safety check may be incomplete." : nil
+        return CheckResult(conflicts: deduped, warningMessage: msg)
+    }
+
+    // Keep legacy signature for internal Helpers.swift (will refactor later or keep for compatibility)
+    static func checkConflictsLegacy(meds: [(name: String, ingredients: [String])]) -> [InteractionConflict] {
+        return checkConflicts(meds: meds).conflicts
     }
 
     private static func conflictsBetween(aName: String, aClasses: [String], bName: String, bIngredients: [String]) -> [InteractionConflict] {

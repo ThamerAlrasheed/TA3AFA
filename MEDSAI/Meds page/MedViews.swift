@@ -6,7 +6,8 @@ import Foundation
 // MARK: - Meds tab (per-user via Firestore)
 struct MedListView: View {
     @EnvironmentObject var settings: AppSettings
-    @StateObject private var repo = UserMedsRepo()
+    @EnvironmentObject private var repo: UserMedsRepo
+    @Environment(\.scenePhase) private var scenePhase
 
     @State private var showingAdd = false
     @State private var analyzedPayload: DrugPayload? = nil
@@ -18,6 +19,7 @@ struct MedListView: View {
     @State private var editMed: LocalMed? = nil
     @State private var infoMed: LocalMed? = nil
     @State private var toDelete: LocalMed? = nil
+    @State private var selectedSafetyWarning: SelectedSafetyWarning?
 
     private func menuIcon(_ systemName: String) -> Image {
         let base = UIImage(systemName: systemName)!
@@ -48,12 +50,22 @@ struct MedListView: View {
 
                         ForEach(repo.meds, id: \.id) { med in
                             MedRowView(med: med,
+                                      warnings: repo.safetyWarnings(for: med),
                                       onEdit: { editMed = med },
                                       onInfo: { infoMed = med },
-                                      onDelete: { toDelete = med })
+                                      onDelete: { toDelete = med },
+                                      onWarningTap: { warning in
+                                          selectedSafetyWarning = SelectedSafetyWarning(
+                                            warning: warning,
+                                            sourceTrace: repo.safetySourceTrace
+                                          )
+                                      })
                         }
                     }
                     .listStyle(.insetGrouped)
+                    .refreshable {
+                        await repo.fetchMeds()
+                    }
                 }
             }
             .navigationTitle("Meds")
@@ -135,6 +147,14 @@ struct MedListView: View {
                 .presentationDetents([.medium, .large])
             }
 
+            .sheet(item: $selectedSafetyWarning) { selected in
+                SafetyWarningDetailView(
+                    warning: selected.warning,
+                    sourceTrace: selected.sourceTrace
+                )
+                .presentationDetents([.medium, .large])
+            }
+
             // Add sheet
             .sheet(isPresented: $showingAdd, onDismiss: { analyzedPayload = nil }) {
                 AddLocalMedView(initialPayload: analyzedPayload) { newMed in
@@ -160,24 +180,48 @@ struct MedListView: View {
             }
             .onAppear { repo.start() }
             .onChange(of: settings.activePatientID) { _, _ in repo.start() }
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase == .active {
+                    Task { await repo.fetchMeds() }
+                }
+            }
         }
     }
+}
+
+private struct SelectedSafetyWarning: Identifiable {
+    let id = UUID()
+    let warning: SafetyWarning
+    let sourceTrace: [String]
 }
 
 // MARK: - Row extracted to avoid complex type-checking
 private struct MedRowView: View {
     @EnvironmentObject var settings: AppSettings
     let med: LocalMed
+    let warnings: [SafetyWarning]
     let onEdit: () -> Void
     let onInfo: () -> Void
     let onDelete: () -> Void
+    let onWarningTap: (SafetyWarning) -> Void
 
     var body: some View {
+        let sortedWarnings = SafetyWarningPresentation.sorted(warnings)
+
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 5) {
                 Text(med.name).font(.headline)
                 let subtitle = "\(med.dosage) • \(med.frequencyPerDay)x/day • \(med.foodRule.label)"
                 Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
+
+                if let primaryWarning = sortedWarnings.first {
+                    SafetyWarningBadge(
+                        warning: primaryWarning,
+                        additionalCount: max(sortedWarnings.count - 1, 0),
+                        onTap: { onWarningTap(primaryWarning) }
+                    )
+                    .padding(.top, 2)
+                }
             }
             Spacer(minLength: 8)
             Menu {
@@ -214,6 +258,7 @@ struct UploadPhotoView: View {
     
     @State private var isAnalyzing = false
     @State private var errorMessage: String? = nil
+    @State private var scanResult: ScanResult? = nil
 
     var body: some View {
         NavigationStack {
@@ -267,6 +312,19 @@ struct UploadPhotoView: View {
                     .disabled(isAnalyzing)
                 }
             }
+            .sheet(item: $scanResult) { result in
+                MedScanConfirmationView(
+                    image: image,
+                    scanResult: result,
+                    onConfirmed: { finalPayload in
+                        onDone?(finalPayload)
+                        dismiss()
+                    },
+                    onCancel: {
+                        scanResult = nil
+                    }
+                )
+            }
         }
     }
     
@@ -281,16 +339,10 @@ struct UploadPhotoView: View {
         
         Task {
             do {
-                let payload = try await DrugInfo.analyzeImage(base64: base64)
-                
-                // Ensure it's in the global catalog so we have a UUID
-                let entry = try? await MedCatalogRepo.shared.upsert(from: payload, searchedName: payload.title)
-                let finalPayload = entry?.payload ?? payload
-
+                let result = try await DrugInfo.analyzeImage(base64: base64)
                 await MainActor.run {
                     isAnalyzing = false
-                    onDone?(finalPayload)
-                    dismiss()
+                    scanResult = result
                 }
             } catch {
                 await MainActor.run {
@@ -300,4 +352,8 @@ struct UploadPhotoView: View {
             }
         }
     }
+}
+
+extension ScanResult: Identifiable {
+    public var id: String { analysis_id }
 }

@@ -2,6 +2,9 @@ import SwiftUI
 import PhotosUI
 
 struct AddLocalMedView: View {
+    @EnvironmentObject var medsRepo: UserMedsRepo
+    @EnvironmentObject var settings: AppSettings
+
     var initialPayload: DrugPayload? = nil
     var onSave: (LocalMed) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -22,6 +25,26 @@ struct AddLocalMedView: View {
     @State private var parsedMinInterval: Int?
     @State private var catalogId: String? // Captured UUID
 
+    // Safety Engine
+    @State private var safetyWarnings: [SafetyWarning] = []
+    @State private var safetySourceTrace: [String] = []
+    @State private var isCheckingSafety = false
+    @State private var showSafetyWarnings = false
+    @State private var offlineSafetyMessage: String? = nil
+    @State private var capturedIngredients: [String] = []
+    @State private var capturedRxCUI: String? = nil
+
+    // Schedule Parsing
+    @State private var instructionText: String = ""
+    @State private var isParsingSchedule = false
+    @State private var parsedSchedulePendingConfirmation = false
+    @State private var isManualSchedule = false
+    @State private var parsedScheduleConfidence: Double = 0
+    @State private var parsedTimesOfDay: [String] = []
+    @State private var dosageTimes: [Date] = []
+    @State private var asNeeded: Bool = false
+    @State private var validationError: String? = nil
+
     // Strengths from GPT
     @State private var dosageOptions: [String]
     
@@ -41,13 +64,7 @@ struct AddLocalMedView: View {
         _infoChips = State(initialValue: p?.indications ?? [])
         _dosageOptions = State(initialValue: p?.strengths ?? [])
         
-        let food: FoodRule = {
-            switch p?.foodRule {
-            case "afterFood": return .afterFood
-            case "beforeFood": return .beforeFood
-            default: return .none
-            }
-        }()
+        let food = FoodRule.fromStorage(p?.foodRule)
         _parsedFoodRule = State(initialValue: food)
         _parsedMinInterval = State(initialValue: p?.minIntervalHours)
         _catalogId = State(initialValue: p?.id?.uuidString)
@@ -71,6 +88,7 @@ struct AddLocalMedView: View {
                             .textInputAutocapitalization(.words)
                             .autocorrectionDisabled()
                             .onChange(of: name) { _, new in scheduleLookup(for: new) }
+                            .onChange(of: name) { _, _ in updateSuggestedTimes() }
 
                         if !name.isEmpty {
                             Button {
@@ -94,11 +112,54 @@ struct AddLocalMedView: View {
 
                     if !dosageOptions.isEmpty {
                         DosePicker(options: dosageOptions, selection: $selectedDosageOption)
+                            .onChange(of: selectedDosageOption) { _, _ in 
+                                isManualSchedule = true
+                                parsedSchedulePendingConfirmation = false
+                                validationError = nil
+                                updateSuggestedTimes()
+                            }
                     } else {
                         DoseManual(amount: $dosageAmount, unit: $dosageUnit)
+                            .onChange(of: dosageAmount) { _, _ in 
+                                isManualSchedule = true
+                                parsedSchedulePendingConfirmation = false
+                                validationError = nil
+                                updateSuggestedTimes()
+                            }
                     }
 
                     Stepper("\(freq)x per day", value: $freq, in: 1...6)
+                        .onChange(of: freq) { _, _ in 
+                            isManualSchedule = true
+                            parsedSchedulePendingConfirmation = false
+                            validationError = nil
+                            updateSuggestedTimes()
+                        }
+                    
+                    Toggle("Take only when needed", isOn: $asNeeded)
+                        .onChange(of: asNeeded) { _, _ in 
+                            parsedSchedulePendingConfirmation = false
+                            validationError = nil
+                            updateSuggestedTimes()
+                        }
+                    
+                    if asNeeded {
+                        Text("No fixed reminders will be created unless you add them manually.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    Picker("Food Timing", selection: $parsedFoodRule) {
+                        Text("No food rule").tag(FoodRule.none)
+                        Text("Before food").tag(FoodRule.beforeFood)
+                        Text("With food").tag(FoodRule.withFood)
+                        Text("After food").tag(FoodRule.afterFood)
+                    }
+                    .onChange(of: parsedFoodRule) { _, _ in
+                        parsedSchedulePendingConfirmation = false
+                        validationError = nil
+                        updateSuggestedTimes()
+                    }
 
                     if isLoadingInfo {
                         HStack(spacing: 8) {
@@ -110,18 +171,150 @@ struct AddLocalMedView: View {
                     }
                 }
 
+                Section {
+                    TextEditor(text: $instructionText)
+                        .frame(minHeight: 80)
+                        .overlay(alignment: .topLeading) {
+                            if instructionText.isEmpty {
+                                Text("Optional: paste instructions from label or doctor")
+                                    .foregroundColor(.secondary)
+                                    .padding(.top, 8)
+                                    .padding(.leading, 4)
+                                    .allowsHitTesting(false)
+                            }
+                        }
+                    
+                    Button(action: suggestSchedule) {
+                        HStack {
+                            if isParsingSchedule {
+                                ProgressView().tint(.accentColor)
+                            } else {
+                                Image(systemName: "sparkles")
+                                Text("Suggest Schedule")
+                            }
+                        }
+                    }
+                    .disabled(isParsingSchedule)
+                } header: {
+                    Text("Instructions")
+                } footer: {
+                    Text("You can enter instructions in English or Arabic.")
+                }
+
+                if parsedSchedulePendingConfirmation {
+                    Section {
+                        VStack(alignment: .leading, spacing: 12) {
+                            HStack {
+                                Image(systemName: "info.circle.fill").foregroundColor(.accentColor)
+                                Text("Suggested Schedule").bold()
+                            }
+                            
+                            Text("Please confirm or edit these suggested reminder times:")
+                                .font(.caption).foregroundColor(.secondary)
+                            
+                            ForEach(0..<dosageTimes.count, id: \.self) { index in
+                                DatePicker("Dose \(index + 1)", selection: $dosageTimes[index], displayedComponents: .hourAndMinute)
+                                    .onChange(of: dosageTimes[index]) { _, _ in 
+                                        isManualSchedule = true
+                                        parsedSchedulePendingConfirmation = false
+                                        validationError = nil
+                                    }
+                            }
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("• \(freq)x per day")
+                                if let amount = dosageAmount {
+                                    Text("• \(amount.formatted()) \(dosageUnit.label)")
+                                }
+                                Text("• \(foodRuleSummary(parsedFoodRule))")
+
+                                if !parsedTimesOfDay.isEmpty {
+                                    Text("• Times: \(parsedTimesOfDay.joined(separator: ", "))")
+                                }
+
+                                if !instructionText.isEmpty {
+                                    Text("• Confidence: \(Int(parsedScheduleConfidence * 100))%")
+                                        .font(.caption)
+                                        .foregroundColor(parsedScheduleConfidence < 0.85 ? .orange : .secondary)
+                                } else {
+                                    Text("• Suggested from your routine")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            .font(.subheadline)
+
+                            Button(action: { parsedSchedulePendingConfirmation = false; validationError = nil }) {
+                                Text("Confirm Times")
+                                    .bold()
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 8)
+                                    .background(Color.accentColor)
+                                    .foregroundColor(.white)
+                                    .cornerRadius(8)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.top, 4)
+                        }
+                        .padding(.vertical, 8)
+                    }
+                }
+
                 Section("Dates") {
                     DatePicker("Start", selection: $start, displayedComponents: .date)
                     DatePicker("End", selection: $end, displayedComponents: .date)
                 }
 
                 Section("Notes") { TextField("Optional notes", text: $notes, axis: .vertical) }
+                
+                if let error = validationError {
+                    Section {
+                        Text(error)
+                            .foregroundColor(.red)
+                            .font(.subheadline)
+                            .bold()
+                    }
+                }
             }
             .navigationTitle("Add medication")
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Save") { save() }.disabled(!canSave)
+                    Button("Save") { 
+                        if parsedSchedulePendingConfirmation {
+                            validationError = "Please confirm or edit the suggested schedule before saving."
+                        } else {
+                            runSafetyCheck()
+                        }
+                    }.disabled(!canSave || isCheckingSafety)
+                }
+            }
+            .sheet(isPresented: $showSafetyWarnings) {
+                SafetyWarningView(
+                    warnings: safetyWarnings,
+                    offlineMessage: offlineSafetyMessage,
+                    sourceTrace: safetySourceTrace,
+                    onConfirm: {
+                        // TODO: Log safety_warning_ignored if backend support exists
+                        save()
+                    },
+                    onCancel: {
+                        showSafetyWarnings = false
+                    }
+                )
+            }
+            .overlay {
+                if isCheckingSafety {
+                    ZStack {
+                        Color.black.opacity(0.2).ignoresSafeArea()
+                        VStack(spacing: 12) {
+                            ProgressView()
+                            Text("Checking safety...").font(.subheadline).bold()
+                        }
+                        .padding(20)
+                        .background(.ultraThinMaterial)
+                        .cornerRadius(12)
+                    }
                 }
             }
         }
@@ -130,8 +323,286 @@ struct AddLocalMedView: View {
     private var canSave: Bool {
         let hasName = !name.trimmingCharacters(in: .whitespaces).isEmpty
         let strengthOK = (!dosageOptions.isEmpty && (selectedDosageOption ?? dosageOptions.first) != nil)
-            || (dosageOptions.isEmpty && dosageAmount != nil)
+            || (dosageOptions.isEmpty && (dosageAmount ?? 0) > 0)
         return hasName && strengthOK && start <= end
+    }
+
+    private func suggestSchedule() {
+        let text = instructionText.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        isParsingSchedule = true
+        parsedSchedulePendingConfirmation = false
+        validationError = nil
+        
+        if text.isEmpty {
+            // Local suggestion based on current selections
+            Task {
+                await MainActor.run {
+                    isParsingSchedule = false
+                    updateSuggestedTimes()
+                    parsedSchedulePendingConfirmation = true
+                }
+            }
+            return
+        }
+        
+        // Detect language: simple regex for Arabic characters
+        let isArabic = text.range(of: "\\p{Arabic}", options: .regularExpression) != nil
+        let lang = isArabic ? "Arabic" : "English"
+        
+        Task {
+            do {
+                let result = try await DrugInfo.parseSchedule(text: text, lang: lang)
+                
+                await MainActor.run {
+                    isParsingSchedule = false
+                    isManualSchedule = false
+                    
+                    // Pre-fill fields
+                    if let f = result.frequency_per_day {
+                        self.freq = f
+                    }
+                    
+                    self.asNeeded = result.as_needed
+                    
+                    let parsedRule = FoodRule.fromStorage(result.food_rule)
+                    if parsedRule != .none {
+                        self.parsedFoodRule = parsedRule
+                    }
+                    
+                    if let amount = result.dose_amount {
+                        self.dosageAmount = amount
+                    }
+                    
+                    if let unit = result.dose_unit {
+                        // Attempt to match unit
+                        if let matched = DosageUnit.allCases.first(where: { $0.label.lowercased().contains(unit.lowercased()) }) {
+                            self.dosageUnit = matched
+                        }
+                    }
+                    
+                    parsedScheduleConfidence = result.confidence
+                    parsedTimesOfDay = result.times_of_day
+                    
+                    updateSuggestedTimes()
+                    parsedSchedulePendingConfirmation = true
+                    // Haptic feedback
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                }
+            } catch {
+                await MainActor.run {
+                    isParsingSchedule = false
+                }
+            }
+        }
+    }
+
+    private func updateSuggestedTimes() {
+        if asNeeded {
+            self.dosageTimes = []
+            return
+        }
+        
+        let tempMed = Medication(
+            id: UUID().uuidString,
+            name: name,
+            dosage: "",
+            frequencyPerDay: freq,
+            startDate: start,
+            endDate: end,
+            foodRule: parsedFoodRule,
+            notes: nil,
+            ingredients: capturedIngredients,
+            minIntervalHours: parsedMinInterval,
+            rxcui: capturedRxCUI,
+            dosageTimes: nil,
+            asNeeded: asNeeded
+        )
+        
+        let times = Scheduler.preferredTimes(for: tempMed, on: start.startOfDay, settings: settings)
+        self.dosageTimes = times
+    }
+
+    private func runSafetyCheck() {
+        validationError = nil
+        let trimmedName = name.trimmingCharacters(in: .whitespaces)
+        isCheckingSafety = true
+        offlineSafetyMessage = nil
+        safetyWarnings = []
+        safetySourceTrace = []
+
+        Task {
+            do {
+                await medsRepo.fetchMeds()
+
+                // 1. Prepare Inputs
+                let pendingMedID = "pending-\(UUID().uuidString)"
+                let currentMed = SafetyMedicationInput(
+                    id: pendingMedID,
+                    name: trimmedName,
+                    rxcui: capturedRxCUI,
+                    ingredients: capturedIngredients
+                )
+                
+                let activeMeds = medsRepo.meds.filter { !$0.isArchived }
+                let existingMeds = activeMeds.map { SafetyMedicationInput(
+                    id: $0.id,
+                    name: $0.name,
+                    rxcui: $0.rxcui,
+                    ingredients: $0.ingredients ?? []
+                )}
+
+                // 2. Call Server Safety Engine
+                let text = instructionText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let isArabic = text.range(of: "\\p{Arabic}", options: .regularExpression) != nil
+                let lang = isArabic ? "Arabic" : "English"
+                
+                let response = try await DrugInfo.checkSafety(
+                    patientId: SupabaseManager.shared.currentUserID?.uuidString.lowercased(),
+                    deviceToken: SupabaseManager.shared.patientDeviceToken,
+                    medications: [currentMed] + existingMeds,
+                    lang: lang
+                )
+
+                await MainActor.run {
+                    isCheckingSafety = false
+                    let relevantWarnings = response.warnings.filter {
+                        isWarning(
+                            $0,
+                            involvingPendingID: pendingMedID,
+                            medName: trimmedName,
+                            medIngredients: capturedIngredients
+                        )
+                    }
+
+                    if relevantWarnings.isEmpty {
+                        save()
+                    } else {
+                        safetyWarnings = relevantWarnings
+                        safetySourceTrace = response.source_trace
+                        showSafetyWarnings = true
+                    }
+                }
+            } catch {
+                // 3. Offline Fallback: InteractionEngine
+                let activeMeds = medsRepo.meds.filter { !$0.isArchived }
+                let localResult = InteractionEngine.checkConflicts(
+                    meds: [(trimmedName, capturedIngredients)] + activeMeds.map { ($0.name, $0.ingredients ?? []) }
+                )
+                
+                await MainActor.run {
+                    isCheckingSafety = false
+                    let relevantConflicts = localResult.conflicts.filter { conflict in
+                        conflict.medA.caseInsensitiveCompare(trimmedName) == .orderedSame ||
+                        conflict.medB.caseInsensitiveCompare(trimmedName) == .orderedSame
+                    }
+
+                    if relevantConflicts.isEmpty {
+                        save()
+                    } else {
+                        // Map local conflicts to SafetyWarning models for the UI
+                        safetyWarnings = relevantConflicts.map { conflict in
+                            SafetyWarning(
+                                type: .drugInteraction,
+                                severity: .major,
+                                meds: [conflict.medA, conflict.medB],
+                                ingredients: [],
+                                description: conflict.explanation,
+                                management: "Consult your doctor for advice.",
+                                source: "local_engine",
+                                is_deterministic: true,
+                                requires_acknowledgement: true,
+                                can_continue: true
+                            )
+                        }
+                        safetySourceTrace = ["local_engine"]
+                        offlineSafetyMessage = localResult.warningMessage
+                        showSafetyWarnings = true
+                    }
+                }
+            }
+        }
+    }
+
+    private func isWarning(
+        _ warning: SafetyWarning,
+        involvingPendingID pendingID: String,
+        medName: String,
+        medIngredients: [String]
+    ) -> Bool {
+        if let affectedIDs = warning.affected_medication_ids, !affectedIDs.isEmpty {
+            return affectedIDs.contains(pendingID)
+        }
+
+        let newMedTerms = Set(canonicalSafetyTerms([medName] + medIngredients))
+        let warningTerms = Set(canonicalSafetyTerms(warning.meds + warning.ingredients))
+
+        if !newMedTerms.isDisjoint(with: warningTerms) {
+            return true
+        }
+
+        return warning.meds
+            .map(normalizeSafetyTerm)
+            .contains { warningMed in
+                let normalizedMedName = normalizeSafetyTerm(medName)
+                return warningMed == normalizedMedName ||
+                    (!warningMed.isEmpty && (warningMed.contains(normalizedMedName) || normalizedMedName.contains(warningMed)))
+            }
+    }
+
+    private func normalizeSafetyTerm(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private func canonicalSafetyTerms(_ values: [String]) -> [String] {
+        var terms = Set<String>()
+
+        for value in values {
+            let normalized = normalizeSafetyTerm(value)
+            guard !normalized.isEmpty else { continue }
+            terms.insert(normalized)
+
+            if let canonical = canonicalIngredient(for: normalized) {
+                terms.insert(canonical)
+            }
+        }
+
+        return Array(terms)
+    }
+
+    private func canonicalIngredient(for normalized: String) -> String? {
+        let aliasMap: [String: String] = [
+            "ibuprofen": "ibuprofen",
+            "advil": "ibuprofen",
+            "motrin": "ibuprofen",
+            "brufen": "ibuprofen",
+            "nurofen": "ibuprofen",
+            "nsaid": "ibuprofen",
+            "nsaids": "ibuprofen",
+            "nonsteroidal anti inflammatory": "ibuprofen",
+            "nonsteroidal anti inflammatory drug": "ibuprofen",
+            "non steroidal anti inflammatory": "ibuprofen",
+            "acetaminophen": "acetaminophen",
+            "paracetamol": "acetaminophen",
+            "tylenol": "acetaminophen",
+            "panadol": "acetaminophen",
+            "amoxicillin": "amoxicillin",
+            "amoxil": "amoxicillin",
+            "augmentin": "amoxicillin"
+        ]
+
+        for (alias, canonical) in aliasMap {
+            if normalized == alias || normalized.contains(alias) {
+                return canonical
+            }
+        }
+
+        return nil
     }
 
     private func save() {
@@ -144,16 +615,26 @@ struct AddLocalMedView: View {
             }
         }()
 
+        let timeFmt = DateFormatter()
+        timeFmt.dateFormat = "HH:mm:ss"
+        let timesStrings = dosageTimes.map { timeFmt.string(from: $0) }
+
         let med = LocalMed(
+            id: initialPayload?.id?.uuidString ?? UUID().uuidString,
             name: name.trimmingCharacters(in: .whitespaces),
             dosage: dosageString,
             frequencyPerDay: freq,
             startDate: start,
             endDate: end,
             foodRule: parsedFoodRule,
+            dosageTimes: timesStrings,
             notes: notes.isEmpty ? nil : notes,
-            ingredients: nil,
+            ingredients: capturedIngredients.isEmpty ? nil : capturedIngredients,
+            rxcui: capturedRxCUI,
             minIntervalHours: parsedMinInterval,
+            isArchived: false,
+            asNeeded: asNeeded,
+            isManualSchedule: isManualSchedule,
             catalogId: catalogId
         )
 
@@ -196,23 +677,32 @@ struct AddLocalMedView: View {
             selectedDosageOption = finalPayload.strengths.first
 
             // Food rule + min interval
-            switch (finalPayload.foodRule ?? "none").lowercased() {
-            case "afterfood", "after_food": parsedFoodRule = .afterFood
-            case "beforefood", "before_food": parsedFoodRule = .beforeFood
-            default: parsedFoodRule = .none
-            }
+            parsedFoodRule = FoodRule.fromStorage(finalPayload.foodRule)
             parsedMinInterval = finalPayload.minIntervalHours
             catalogId = finalPayload.id?.uuidString
+            capturedIngredients = finalPayload.ingredients
+            capturedRxCUI = finalPayload.rxcui
+            isManualSchedule = false
 
             // Chips
             var chips: [String] = []
             if parsedFoodRule == .afterFood { chips.append("Take after food") }
             if parsedFoodRule == .beforeFood { chips.append("Take before food") }
+            if parsedFoodRule == .withFood { chips.append("Take with food") }
             if let ih = parsedMinInterval { chips.append("~every \(ih)h") }
             infoChips = chips
 
         } catch {
             infoChips = ["Couldn’t fetch info"]
+        }
+    }
+
+    private func foodRuleSummary(_ rule: FoodRule) -> String {
+        switch rule {
+        case .none: return "No food rule"
+        case .beforeFood: return "Take before food"
+        case .withFood: return "Take with food"
+        case .afterFood: return "Take after food"
         }
     }
 }

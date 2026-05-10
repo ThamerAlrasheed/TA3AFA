@@ -14,9 +14,15 @@ final class AppSettings: ObservableObject {
     @Published var lastName: String
     @Published var dateOfBirth: Date?
     
-    // Caregiver Role (persisted to UserDefaults)
+    // Caregiver role and patient session context are persisted in Keychain.
     @Published var role: UserRole {
-        didSet { UserDefaults.standard.set(role.rawValue, forKey: "userRole") }
+        didSet {
+            do {
+                try PatientSessionStore.shared.setUserRole(role.rawValue)
+            } catch {
+                print("Patient session storage failed while saving role: \(error.localizedDescription)")
+            }
+        }
     }
     @Published var activePatientID: String? {
         didSet {
@@ -31,10 +37,10 @@ final class AppSettings: ObservableObject {
     } // If caregiver, who are we viewing?
     @Published var activePatientName: String? {
         didSet {
-            if let activePatientName, !activePatientName.isEmpty {
-                UserDefaults.standard.set(activePatientName, forKey: "activePatientName")
-            } else {
-                UserDefaults.standard.removeObject(forKey: "activePatientName")
+            do {
+                try PatientSessionStore.shared.setActivePatientName(activePatientName)
+            } catch {
+                print("Patient session storage failed while saving active patient name: \(error.localizedDescription)")
             }
         }
     }
@@ -58,6 +64,7 @@ final class AppSettings: ObservableObject {
         var label: String { rawValue.capitalized }
     }
     @Published var appearanceMode: AppearanceMode
+    @Published var sessionRevokedMessage: String? = nil
 
     /// Returns the ColorScheme to pass to `.preferredColorScheme()`.
     /// `nil` means follow the system setting.
@@ -77,16 +84,22 @@ final class AppSettings: ObservableObject {
     private var supabase: SupabaseManager { .shared }
 
     private init() {
+        do {
+            try PatientSessionStore.shared.migrateLegacyUserDefaultsIfNeeded()
+        } catch {
+            print("Patient session migration failed: \(error.localizedDescription)")
+        }
+
         // Profile defaults
         firstName = ""
         lastName  = ""
         dateOfBirth = nil
 
         // Restore persisted role
-        let savedRole = UserDefaults.standard.string(forKey: "userRole") ?? UserRole.regular.rawValue
+        let savedRole = PatientSessionStore.shared.userRoleRawValue ?? UserRole.regular.rawValue
         role = UserRole(rawValue: savedRole) ?? .regular
         activePatientID = SupabaseManager.shared.activePatientID?.uuidString.lowercased()
-        activePatientName = UserDefaults.standard.string(forKey: "activePatientName")
+        activePatientName = PatientSessionStore.shared.activePatientName
 
         // Routine defaults (these are used until we load from Supabase)
         breakfast = DateComponents(hour: 8,  minute: 0)
@@ -102,6 +115,15 @@ final class AppSettings: ObservableObject {
         // Appearance default (light)
         let savedMode = UserDefaults.standard.string(forKey: "appearanceMode") ?? AppearanceMode.light.rawValue
         appearanceMode = AppearanceMode(rawValue: savedMode) ?? .light
+
+        // Handle session expiration (revocation)
+        SupabaseManager.shared.onSessionExpired = { [weak self] in
+            guard let self else { return }
+            Task { @MainActor in
+                self.sessionRevokedMessage = "Your access to this patient profile has been revoked by the caregiver."
+                self.forceDisconnectPatient()
+            }
+        }
 
         // Debounced auto-save when routine changes locally
         saveDebounce
@@ -122,6 +144,8 @@ final class AppSettings: ObservableObject {
         .sink { [weak self] in
             guard let self, !self.isApplyingRemote else { return }
             self.saveDebounce.send(())
+            // Notify repo to refresh all reminders
+            NotificationCenter.default.post(name: NSNotification.Name("UserRoutineChanged"), object: nil)
         }
         .store(in: &cancellables)
 
@@ -135,6 +159,19 @@ final class AppSettings: ObservableObject {
     func resetAppFlow() {
         didChooseEntry = false
         onboardingCompleted = false
+    }
+
+    @MainActor
+    func forceDisconnectPatient() {
+        // Clear session
+        PatientSessionStore.shared.clearAllSessionValuesBestEffort()
+        
+        // Reset local state to landing
+        role = .regular
+        didChooseEntry = false
+        // activePatientID and activePatientName are updated via didSet on role or manually
+        activePatientID = nil
+        activePatientName = nil
     }
 
     @MainActor

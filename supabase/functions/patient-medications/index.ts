@@ -6,10 +6,16 @@ type MedicationPayload = {
   dosage?: string;
   frequency_per_day?: number;
   frequency_hours?: number | null;
+  dosage_times?: string[];
+  is_prn?: boolean;
+  is_manual_schedule?: boolean;
   start_date?: string;
   end_date?: string;
   notes?: string | null;
   food_rule?: string | null;
+  rxcui?: string | null;
+  ingredients?: string[];
+  active_ingredients?: string[];
 };
 
 type AppointmentPayload = {
@@ -74,15 +80,54 @@ function cleanDate(value: string | undefined) {
   return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) ? trimmed : null;
 }
 
+function normalizeFoodRule(value: string | undefined | null) {
+  const normalized = cleanText(value).toLowerCase().replaceAll("_", "");
+  switch (normalized) {
+    case "beforefood": return "beforeFood";
+    case "afterfood": return "afterFood";
+    case "withfood": return "withFood";
+    default: return "none";
+  }
+}
+
+function cleanList(value: string[] | undefined | null) {
+  return (value ?? [])
+    .map((item) => cleanText(item))
+    .filter((item, index, arr) => item.length > 0 && arr.indexOf(item) === index);
+}
+
 async function patientIdForDeviceToken(deviceToken: string) {
+  // Check if session exists and is NOT revoked.
+  // We use a join but we must be careful: if no patient_devices row exists (legacy), 
+  // we still allow it for now.
   const { data, error } = await admin
     .from("device_sessions")
-    .select("user_id")
+    .select(`
+      user_id,
+      patient_devices!device_session_id(revoked_at)
+    `)
     .eq("device_token", deviceToken)
-    .limit(1);
+    .limit(1)
+    .maybeSingle();
 
-  if (error) throw new Error(error.message);
-  return data?.[0]?.user_id as string | undefined;
+  if (error) {
+    console.error("Auth check failed:", error);
+    return undefined;
+  }
+  
+  if (!data) return undefined;
+
+  // If a device record exists and it has a revoked_at date, deny access.
+  // Note: if multiple devices shared a session (unlikely but possible), 
+  // we check if ANY are revoked? Actually device_session_id is 1:1 or 1:N.
+  // The query returns an array for the joined table.
+  const devices = data.patient_devices as any[];
+  if (devices && devices.some(d => d.revoked_at !== null)) {
+    console.warn(`Device revoked for session: ${deviceToken}`);
+    return undefined;
+  }
+
+  return data.user_id as string | undefined;
 }
 
 async function patientIdForCaregiver(req: Request, targetPatientId: string) {
@@ -96,6 +141,10 @@ async function patientIdForCaregiver(req: Request, targetPatientId: string) {
 
   const { data: authData, error: authError } = await caller.auth.getUser();
   if (authError || !authData.user) return undefined;
+
+  if (authData.user.id === targetPatientId) {
+    return targetPatientId;
+  }
 
   const { data, error } = await admin
     .from("caregiver_relations")
@@ -129,7 +178,7 @@ async function permissionsForPatient(patientId: string) {
 async function listMedications(patientId: string) {
   const { data, error } = await admin
     .from("user_medications")
-    .select("*, medications(name, food_rule)")
+    .select("*, medications(name, food_rule, rxcui, active_ingredients)")
     .eq("user_id", patientId)
     .eq("is_active", true)
     .order("start_date", { ascending: true });
@@ -149,7 +198,26 @@ async function listAppointments(patientId: string) {
   return data ?? [];
 }
 
-async function medicationIdForName(name: string, foodRule: string) {
+async function medicationIdForName(name: string, foodRule: string, rxcui?: string | null, activeIngredients: string[] = []) {
+  if (rxcui) {
+    const { data: byRxCui, error: rxLookupError } = await admin
+      .from("medications")
+      .select("id")
+      .eq("rxcui", rxcui)
+      .limit(1);
+
+    if (rxLookupError) throw new Error(rxLookupError.message);
+    if (byRxCui?.[0]?.id) {
+      const update: Record<string, unknown> = { name, food_rule: foodRule };
+      if (activeIngredients.length > 0) update.active_ingredients = activeIngredients;
+      await admin
+        .from("medications")
+        .update(update)
+        .eq("id", byRxCui[0].id);
+      return byRxCui[0].id as string;
+    }
+  }
+
   const { data: existing, error: lookupError } = await admin
     .from("medications")
     .select("id")
@@ -157,13 +225,21 @@ async function medicationIdForName(name: string, foodRule: string) {
     .limit(1);
 
   if (lookupError) throw new Error(lookupError.message);
-  if (existing?.[0]?.id) return existing[0].id as string;
+  if (existing?.[0]?.id) {
+    const update: Record<string, unknown> = { food_rule: foodRule };
+    if (rxcui) update.rxcui = rxcui;
+    if (activeIngredients.length > 0) update.active_ingredients = activeIngredients;
+    await admin.from("medications").update(update).eq("id", existing[0].id);
+    return existing[0].id as string;
+  }
 
   const { data: inserted, error: insertError } = await admin
     .from("medications")
     .insert({
       name,
       food_rule: foodRule || "none",
+      rxcui: rxcui ?? null,
+      active_ingredients: activeIngredients,
     })
     .select("id")
     .limit(1);
@@ -178,13 +254,14 @@ async function saveMedication(patientId: string, medication: MedicationPayload) 
   const startDate = cleanDate(medication.start_date);
   const endDate = cleanDate(medication.end_date);
   const frequencyPerDay = Math.max(1, Math.min(6, Math.trunc(medication.frequency_per_day ?? 1)));
-  const foodRule = cleanText(medication.food_rule) || "none";
+  const foodRule = normalizeFoodRule(medication.food_rule);
+  const activeIngredients = cleanList(medication.active_ingredients ?? medication.ingredients);
 
   if (!name || !dosage || !startDate || !endDate) {
     return json(400, { error: "Medication name, dosage, start date, and end date are required." });
   }
 
-  const medicationId = await medicationIdForName(name, foodRule);
+  const medicationId = await medicationIdForName(name, foodRule, cleanText(medication.rxcui) || null, activeIngredients);
   if (!medicationId) {
     return json(500, { error: `Medication '${name}' could not be found or created in the catalog.` });
   }
@@ -196,6 +273,10 @@ async function saveMedication(patientId: string, medication: MedicationPayload) 
     dosage,
     frequency_per_day: frequencyPerDay,
     frequency_hours: medication.frequency_hours ?? null,
+    food_rule: foodRule,
+    dosage_times: medication.dosage_times ?? [],
+    is_prn: medication.is_prn ?? false,
+    is_manual_schedule: medication.is_manual_schedule ?? false,
     start_date: startDate,
     end_date: endDate,
     notes: cleanText(medication.notes) || null,
