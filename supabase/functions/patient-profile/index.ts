@@ -51,6 +51,12 @@ interface ProfileRequest {
   routine?: PatientRoutine;
 }
 
+type PatientContext = {
+  patientId: string;
+  actorId: string;
+  actorRole: "patient" | "caregiver";
+};
+
 async function patientIdForDeviceToken(deviceToken: string) {
   const { data, error } = await admin
     .from("device_sessions")
@@ -70,7 +76,13 @@ async function patientIdForDeviceToken(deviceToken: string) {
   return data.user_id as string | undefined;
 }
 
-async function patientIdForCaregiver(req: Request, targetPatientId: string) {
+async function patientContextForDeviceToken(deviceToken: string): Promise<PatientContext | undefined> {
+  const patientId = await patientIdForDeviceToken(deviceToken);
+  if (!patientId) return undefined;
+  return { patientId, actorId: patientId, actorRole: "patient" };
+}
+
+async function patientContextForAuthorizedUser(req: Request, targetPatientId: string): Promise<PatientContext | undefined> {
   const authHeader = req.headers.get("Authorization");
   if (!authHeader) return undefined;
 
@@ -82,7 +94,7 @@ async function patientIdForCaregiver(req: Request, targetPatientId: string) {
   if (error || !user) return undefined;
 
   if (user.id === targetPatientId) {
-    return targetPatientId;
+    return { patientId: targetPatientId, actorId: user.id, actorRole: "patient" };
   }
 
   const { data: relation } = await admin
@@ -90,9 +102,12 @@ async function patientIdForCaregiver(req: Request, targetPatientId: string) {
     .select("patient_id")
     .eq("caregiver_id", user.id)
     .eq("patient_id", targetPatientId)
+    .eq("status", "active")
     .maybeSingle();
 
-  return relation?.patient_id as string | undefined;
+  const patientId = relation?.patient_id as string | undefined;
+  if (!patientId) return undefined;
+  return { patientId, actorId: user.id, actorRole: "caregiver" };
 }
 
 Deno.serve(async (req) => {
@@ -102,14 +117,17 @@ Deno.serve(async (req) => {
     const payload: ProfileRequest = await req.json();
     const { action, patient_id: targetPid, device_token } = payload;
 
-    const patientId = device_token 
-      ? await patientIdForDeviceToken(device_token) 
-      : (targetPid ? await patientIdForCaregiver(req, targetPid) : undefined);
+    if (device_token && targetPid) {
+      return jsonResponse({ error: "Provide either device_token or patient_id, not both" }, 400);
+    }
 
-    if (!patientId) return jsonResponse({ error: "Unauthorized" }, 401);
+    const context = device_token
+      ? await patientContextForDeviceToken(device_token)
+      : (targetPid ? await patientContextForAuthorizedUser(req, targetPid) : undefined);
 
-    const actorId = device_token ? patientId : (await admin.auth.getUser(req.headers.get("Authorization")?.split(" ")[1] ?? "")).data.user?.id;
-    const actorRole = device_token ? "patient" : "caregiver";
+    if (!context) return jsonResponse({ error: "Unauthorized" }, 401);
+
+    const { patientId, actorId, actorRole } = context;
 
     if (action === "list_allergies") {
       const { data } = await admin.from("patient_allergies").select("*").eq("patient_id", patientId).eq("is_active", true);

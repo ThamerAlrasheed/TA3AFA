@@ -14,8 +14,18 @@ struct MedicalProfileView: View {
     @State private var showAddAllergy = false
     @State private var showAddCondition = false
 
-    private var isCaregiverWithNoPatient: Bool {
-        settings.role == .caregiver && settings.activePatientID == nil
+    private var requestPatientId: String? {
+        if settings.role == .caregiver {
+            return settings.activePatientID
+        }
+        if settings.role == .patient {
+            return nil
+        }
+        return patientId
+    }
+
+    private var profileContextKey: String {
+        "\(settings.role.rawValue):\(requestPatientId ?? "self")"
     }
 
     private var navTitle: String {
@@ -24,29 +34,24 @@ struct MedicalProfileView: View {
             return "Your Medical Profile"
         case .caregiver:
             if let name = settings.activePatientName { return "\(name)'s Profile" }
-            return "Medical Profile"
+            return "My Medical Profile"
         default:
             return "Medical Profile"
         }
     }
 
     var body: some View {
-        Group {
-            if isCaregiverWithNoPatient {
-                noPatientView
-            } else {
-                profileList
-            }
-        }
+        profileList
         .navigationTitle(navTitle)
         .navigationBarTitleDisplayMode(.inline)
-        .task { await loadProfile() }
+        .task(id: profileContextKey) { await loadProfile() }
         .refreshable { await loadProfile() }
+        .tint(Color.istsehGreen)
         .sheet(isPresented: $showAddAllergy) {
             NavigationStack {
                 AllergyDetailView(
-                    allergy: Allergy(name: ""),
-                    patientId: patientId,
+                    allergy: Allergy(id: "", name: ""),
+                    patientId: requestPatientId,
                     onSave: { showAddAllergy = false; Task { await loadProfile() } }
                 )
                 .toolbar {
@@ -59,8 +64,8 @@ struct MedicalProfileView: View {
         .sheet(isPresented: $showAddCondition) {
             NavigationStack {
                 ConditionDetailView(
-                    condition: Condition(name: ""),
-                    patientId: patientId,
+                    condition: Condition(id: "", name: ""),
+                    patientId: requestPatientId,
                     onSave: { showAddCondition = false; Task { await loadProfile() } }
                 )
                 .toolbar {
@@ -92,7 +97,7 @@ struct MedicalProfileView: View {
                         NavigationLink {
                             AllergyDetailView(
                                 allergy: allergy,
-                                patientId: patientId,
+                                patientId: requestPatientId,
                                 onSave: { Task { await loadProfile() } }
                             )
                         } label: {
@@ -119,7 +124,7 @@ struct MedicalProfileView: View {
                         NavigationLink {
                             ConditionDetailView(
                                 condition: condition,
-                                patientId: patientId,
+                                patientId: requestPatientId,
                                 onSave: { Task { await loadProfile() } }
                             )
                         } label: {
@@ -134,30 +139,19 @@ struct MedicalProfileView: View {
                 }
             } header: {
                 Label("Chronic Conditions", systemImage: "heart.text.clipboard.fill")
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(Color.istsehGreen)
             }
         }
         .listStyle(.insetGrouped)
     }
 
-    // MARK: - No Patient Placeholder
-
-    private var noPatientView: some View {
-        ContentUnavailableView(
-            "No Patient Selected",
-            systemImage: "person.crop.circle.badge.questionmark",
-            description: Text("Select a patient from the Family Members screen to view their medical profile.")
-        )
-    }
-
     // MARK: - Load
 
     private func loadProfile() async {
-        guard !isCaregiverWithNoPatient else { return }
         isLoading = true
         do {
-            async let a = DrugInfo.listAllergies(patientId: patientId)
-            async let c = DrugInfo.listConditions(patientId: patientId)
+            async let a = DrugInfo.listAllergies(patientId: requestPatientId)
+            async let c = DrugInfo.listConditions(patientId: requestPatientId)
             let (al, co) = try await (a, c)
             await MainActor.run {
                 self.allergies = al
@@ -256,7 +250,7 @@ struct SeverityBadge: View {
         switch severity.lowercased() {
         case "severe": return .red
         case "moderate": return .orange
-        case "mild": return .blue
+        case "mild": return Color.istsehGreen
         default: return Color(.systemGray)
         }
     }
@@ -275,9 +269,9 @@ struct StatusBadge: View {
     }
     private var badgeColor: Color {
         switch status.lowercased() {
-        case "active": return .teal
+        case "active": return Color.istsehGreen
         case "inactive": return Color(.systemGray)
-        case "resolved": return .blue
+        case "resolved": return Color.istsehGreen
         default: return Color(.systemGray)
         }
     }
@@ -298,7 +292,7 @@ struct AllergyDetailView: View {
     @State private var isPicking: Bool
 
     private let allergyId: String
-    private var isNew: Bool { allergyId.count < 10 }
+    private var isNew: Bool { allergyId.isEmpty || allergyId.count < 10 }
     private var canSave: Bool {
         !selectedName.trimmingCharacters(in: .whitespaces).isEmpty && !isSaving
     }
@@ -313,7 +307,7 @@ struct AllergyDetailView: View {
         _severity = State(initialValue: allergy.severity.isEmpty ? "unknown" : allergy.severity)
         _reaction = State(initialValue: allergy.reaction ?? "")
         _notes = State(initialValue: allergy.notes ?? "")
-        _isPicking = State(initialValue: allergy.id.count < 10)
+        _isPicking = State(initialValue: allergy.id.isEmpty || allergy.id.count < 10)
     }
 
     var body: some View {
@@ -373,6 +367,7 @@ struct AllergyDetailView: View {
         )
         .navigationTitle(isNew ? "Add Allergy" : "Change Allergy")
         .navigationBarTitleDisplayMode(.large)
+        .tint(Color.istsehGreen)
     }
 
     // MARK: - Form
@@ -400,7 +395,7 @@ struct AllergyDetailView: View {
                     Spacer()
                     Button("Change") { isPicking = true }
                         .font(.subheadline)
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(Color.istsehGreen)
                 }
                 .padding(.vertical, 4)
             } header: {
@@ -444,6 +439,7 @@ struct AllergyDetailView: View {
         }
         .navigationTitle(isNew ? "Add Allergy" : "Edit Allergy")
         .navigationBarTitleDisplayMode(.inline)
+        .tint(Color.istsehGreen)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 if isSaving {
@@ -507,7 +503,7 @@ struct ConditionDetailView: View {
     @State private var isPicking: Bool
 
     private let conditionId: String
-    private var isNew: Bool { conditionId.count < 10 }
+    private var isNew: Bool { conditionId.isEmpty || conditionId.count < 10 }
     private var canSave: Bool {
         !selectedName.trimmingCharacters(in: .whitespaces).isEmpty && !isSaving
     }
@@ -521,7 +517,7 @@ struct ConditionDetailView: View {
         _selectedName = State(initialValue: condition.name)
         _status = State(initialValue: condition.status.isEmpty ? "active" : condition.status)
         _notes = State(initialValue: condition.notes ?? "")
-        _isPicking = State(initialValue: condition.id.count < 10)
+        _isPicking = State(initialValue: condition.id.isEmpty || condition.id.count < 10)
     }
 
     var body: some View {
@@ -581,6 +577,7 @@ struct ConditionDetailView: View {
         )
         .navigationTitle(isNew ? "Add Condition" : "Change Condition")
         .navigationBarTitleDisplayMode(.large)
+        .tint(Color.istsehGreen)
     }
 
     // MARK: - Form
@@ -590,7 +587,7 @@ struct ConditionDetailView: View {
             Section {
                 HStack(spacing: 12) {
                     Image(systemName: "heart.text.clipboard.fill")
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(Color.istsehGreen)
                         .font(.title3)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(
@@ -608,7 +605,7 @@ struct ConditionDetailView: View {
                     Spacer()
                     Button("Change") { isPicking = true }
                         .font(.subheadline)
-                        .foregroundStyle(.blue)
+                        .foregroundStyle(Color.istsehGreen)
                 }
                 .padding(.vertical, 4)
             } header: {
@@ -651,6 +648,7 @@ struct ConditionDetailView: View {
         }
         .navigationTitle(isNew ? "Add Condition" : "Edit Condition")
         .navigationBarTitleDisplayMode(.inline)
+        .tint(Color.istsehGreen)
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
                 if isSaving {

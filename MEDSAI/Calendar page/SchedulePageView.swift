@@ -13,6 +13,13 @@ struct SchedulePageView: View {
     @State private var showAddAppointment = false
     @State private var editingAppointment: Appointment? = nil
 
+    private var canEditAppointments: Bool {
+        if settings.role == .patient {
+            return repo.canManageCalendar
+        }
+        return true
+    }
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -93,7 +100,7 @@ struct SchedulePageView: View {
                     Text("No appointments on this day.")
                         .foregroundStyle(.secondary)
 
-                    if settings.role != .patient || repo.canManageCalendar {
+                    if canEditAppointments {
                         // Centered, perfectly centered text inside the green pill
                         HStack {
                             Spacer()
@@ -131,7 +138,7 @@ struct SchedulePageView: View {
                                     .font(.headline)
                                     .monospacedDigit()
 
-                                if settings.role != .patient || repo.canManageCalendar {
+                                if canEditAppointments {
                                     Menu {
                                         Button { editingAppointment = appt } label: {
                                             Label("Edit", systemImage: "pencil")
@@ -158,7 +165,7 @@ struct SchedulePageView: View {
                         Divider().padding(.leading, 16)
                     }
 
-                    if settings.role != .patient || repo.canManageCalendar {
+                    if canEditAppointments {
                         // Centered "Add appointment" pill under list
                         HStack {
                             Spacer()
@@ -343,7 +350,7 @@ private struct CenteredPillButton: View {
                 .frame(minWidth: 160, maxWidth: .infinity, minHeight: 44, maxHeight: 44)
                 .contentShape(Rectangle())
         }
-        .background(Color.accentColor)
+        .background(Color.istsehGreen)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
     }

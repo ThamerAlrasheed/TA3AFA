@@ -79,8 +79,43 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
     // MARK: - Reminders Lifecycle
 
     // MARK: - UserDefaults toggle helpers (default true if key never set)
+    static func reminderContextKey() -> String {
+        let supabase = SupabaseManager.shared
+        if let activePatientID = supabase.activePatientID {
+            return "managed.\(activePatientID.uuidString.lowercased())"
+        }
+        if supabase.isPatientMode, let patientID = supabase.patientUserID {
+            return "patient.\(patientID.uuidString.lowercased())"
+        }
+        if let authenticatedID = supabase.authenticatedUserID {
+            return "self.\(authenticatedID.uuidString.lowercased())"
+        }
+        return "self.local"
+    }
+
+    static func reminderDefaultsKey(_ setting: String, contextKey: String? = nil) -> String {
+        "notify.\(contextKey ?? reminderContextKey()).\(setting)"
+    }
+
+    static func reminderSetting(_ setting: String, contextKey: String? = nil) -> Bool {
+        let defaults = UserDefaults.standard
+        let scopedKey = reminderDefaultsKey(setting, contextKey: contextKey)
+        if let value = defaults.object(forKey: scopedKey) as? Bool {
+            return value
+        }
+        if let legacyValue = defaults.object(forKey: "notify.\(setting)") as? Bool {
+            return legacyValue
+        }
+        return true
+    }
+
+    static func setReminderSetting(_ value: Bool, setting: String, contextKey: String? = nil) {
+        UserDefaults.standard.set(value, forKey: reminderDefaultsKey(setting, contextKey: contextKey))
+    }
+
     private func boolSetting(_ key: String) -> Bool {
-        UserDefaults.standard.object(forKey: key) as? Bool ?? true
+        let setting = key.replacingOccurrences(of: "notify.", with: "")
+        return Self.reminderSetting(setting)
     }
 
     func updateReminders(for med: LocalMed) {

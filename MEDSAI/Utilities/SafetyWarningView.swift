@@ -82,7 +82,7 @@ enum SafetyWarningPresentation {
             case .contraindicated: return .red
             case .major: return .orange
             case .moderate: return .yellow
-            case .minor: return .blue
+            case .minor: return Color.istsehGreen
             case .unknown: return .gray
             }
         case .duplicateIngredient:
@@ -211,7 +211,7 @@ struct SafetyWarningView: View {
                                 .bold()
                                 .frame(maxWidth: .infinity)
                                 .padding()
-                                .background(Color.accentColor)
+                                .background(Color.istsehGreen)
                                 .foregroundColor(.white)
                                 .cornerRadius(12)
                         }
@@ -226,7 +226,7 @@ struct SafetyWarningView: View {
                                 .bold()
                                 .frame(maxWidth: .infinity)
                                 .padding()
-                                .background(isMajor ? Color.orange : Color.accentColor)
+                                .background(isMajor ? Color.orange : Color.istsehGreen)
                                 .foregroundColor(.white)
                                 .cornerRadius(12)
                         }

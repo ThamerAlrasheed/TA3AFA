@@ -284,12 +284,12 @@ private struct DayCell: View {
                     // Selected background
                     if isSelected {
                         Circle()
-                            .fill(Color.accentColor)
+                            .fill(Color.istsehGreen)
                             .frame(width: 32, height: 32)
-                            .shadow(color: Color.accentColor.opacity(0.25), radius: 4, x: 0, y: 2)
+                            .shadow(color: Color.istsehGreen.opacity(0.25), radius: 4, x: 0, y: 2)
                     } else if isToday {
                         Circle()
-                            .stroke(Color.accentColor, lineWidth: 2)
+                            .stroke(Color.istsehGreen, lineWidth: 2)
                             .frame(width: 32, height: 32)
                     }
 

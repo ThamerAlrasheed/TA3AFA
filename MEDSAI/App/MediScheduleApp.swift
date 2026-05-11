@@ -14,7 +14,7 @@ struct MediScheduleApp: App {
             RootView()
                 .environmentObject(settings)
                 .environmentObject(medsRepo)
-                .tint(Color(.systemGreen))
+                .tint(Color.istsehGreen)
                 .preferredColorScheme(settings.colorScheme)
                 .onAppear {
                     NotificationsManager.shared.configure()

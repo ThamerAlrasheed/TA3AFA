@@ -185,6 +185,7 @@ final class AppointmentsRepo: ObservableObject {
         let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
+
 }
 
 // MARK: - DB Row Decodable

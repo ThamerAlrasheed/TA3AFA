@@ -35,7 +35,7 @@ struct RoutineSettingsView: View {
         }
         .navigationTitle("Daily Routine")
         .navigationBarTitleDisplayMode(.inline)
-        .tint(.orange)
+        .tint(Color.istsehGreen)
         .onAppear {
             Task { await settings.loadRoutineFromSupabase() }
         }
@@ -73,7 +73,7 @@ private struct RoutineSaveToast: View {
     private var tint: Color {
         switch status {
         case .saving: return .orange
-        case .saved:  return .green
+        case .saved:  return Color.istsehGreen
         case .failed: return .red
         case .idle:   return .clear
         }

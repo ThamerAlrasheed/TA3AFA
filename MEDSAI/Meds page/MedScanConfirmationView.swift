@@ -100,7 +100,7 @@ struct MedScanConfirmationView: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding()
-                    .background(Color.accentColor)
+                    .background(Color.istsehGreen)
                     .foregroundColor(.white)
                     .cornerRadius(12)
                     .bold()
@@ -138,16 +138,16 @@ struct MedScanConfirmationView: View {
                 Spacer()
                 if selectedCandidate?.id == candidate.id {
                     Image(systemName: "checkmark.circle.fill")
-                        .foregroundColor(.accentColor)
+                        .foregroundColor(Color.istsehGreen)
                 }
                 Text("\(Int(candidate.confidence * 100))%")
                     .font(.caption2)
                     .padding(4)
-                    .background(Color.accentColor.opacity(0.1))
+                    .background(Color.istsehGreen.opacity(0.1))
                     .cornerRadius(4)
             }
             .padding(10)
-            .background(selectedCandidate?.id == candidate.id ? Color.accentColor.opacity(0.05) : Color.clear)
+            .background(selectedCandidate?.id == candidate.id ? Color.istsehGreen.opacity(0.05) : Color.clear)
             .cornerRadius(8)
         }
         .buttonStyle(.plain)

@@ -96,7 +96,7 @@ struct LoginPageView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .padding(.vertical, 16)
-                .background(isValid ? Color.accentColor : Color.accentColor.opacity(0.5))
+                .background(isValid ? Color.istsehGreen : Color.istsehGreen.opacity(0.5))
                 .foregroundColor(.white)
                 .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                 .shadow(radius: 8, y: 6)
@@ -204,7 +204,7 @@ struct LoginPageView: View {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(isFocused ? Color.accentColor : Color.primary.opacity(0.08),
+                    .strokeBorder(isFocused ? Color.istsehGreen : Color.primary.opacity(0.08),
                                   lineWidth: isFocused ? 1.5 : 1)
             )
         }

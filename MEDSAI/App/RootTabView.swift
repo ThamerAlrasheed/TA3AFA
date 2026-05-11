@@ -17,11 +17,7 @@ struct RootTabView: View {
                 SchedulePageView().tag(1)
                 MedListView().tag(2)
                 SearchView().tag(3)
-                if settings.role == .patient && settings.activePatientID == nil {
-                    PatientSettingsView().tag(4)
-                } else {
-                    SettingsView().tag(4)
-                }
+                SettingsView().tag(4)
             }
             .toolbar(.hidden, for: .tabBar) // hide Apple's tab bar (iOS 16+)
             .onAppear {

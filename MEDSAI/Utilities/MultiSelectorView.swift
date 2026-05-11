@@ -83,7 +83,7 @@ private struct ItemPickerView: View {
                             Text("Add \"\(searchText)\"")
                             Spacer()
                         }
-                        .foregroundStyle(.green)
+                        .foregroundStyle(Color.istsehGreen)
                     }
                 }
                 
@@ -96,7 +96,7 @@ private struct ItemPickerView: View {
                             Spacer()
                             if selectedItems.contains(item) {
                                 Image(systemName: "checkmark")
-                                    .foregroundStyle(.green)
+                                    .foregroundStyle(Color.istsehGreen)
                             }
                         }
                     }
@@ -139,8 +139,8 @@ private struct TagView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(Color.green.opacity(0.1))
-        .foregroundStyle(.green)
+        .background(Color.istsehGreenSoft)
+        .foregroundStyle(Color.istsehGreen)
         .clipShape(Capsule())
     }
 }

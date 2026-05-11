@@ -693,7 +693,14 @@ enum DrugInfo: DrugInfoProvider {
             )
         }
 
-        let resolvedPatientId = patientId ?? supabase.currentUserID?.uuidString.lowercased()
+        if let activePatientID = supabase.activePatientID {
+            return PatientRequestContext(
+                patientId: activePatientID.uuidString.lowercased(),
+                deviceToken: nil
+            )
+        }
+
+        let resolvedPatientId = patientId ?? supabase.authenticatedUserID?.uuidString.lowercased()
         return PatientRequestContext(patientId: resolvedPatientId, deviceToken: nil)
     }
 

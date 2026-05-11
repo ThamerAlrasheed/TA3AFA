@@ -116,12 +116,16 @@ Deno.serve(async (req) => {
     const { medications = [], lang = "English", device_token, patient_id: targetPid } = payload;
     const sourceTrace: string[] = [];
 
+    if (device_token && targetPid) {
+      return jsonResponse({ error: "Provide either device_token or patient_id, not both" }, 400);
+    }
+
     const patientId = device_token 
       ? await patientIdForDeviceToken(admin, device_token)
       : (targetPid ? await patientIdForCaregiver(SUPABASE_URL, SUPABASE_ANON_KEY, admin, req, targetPid) : undefined);
 
     if ((targetPid || device_token) && !patientId) {
-      sourceTrace.push("patient_context_unauthorized");
+      return jsonResponse({ error: "Unauthorized patient context" }, 401);
     }
 
     // Backward compatibility for old rxcuis[] only input

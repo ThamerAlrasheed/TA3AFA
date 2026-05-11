@@ -37,7 +37,7 @@ struct FamilySettingsView: View {
                             HStack(spacing: 12) {
                                 Image(systemName: "person.crop.circle.fill")
                                     .font(.title2)
-                                    .foregroundStyle(.teal)
+                                    .foregroundStyle(Color.istsehGreen)
                                     .frame(width: 32)
 
                                 VStack(alignment: .leading, spacing: 4) {
@@ -49,9 +49,9 @@ struct FamilySettingsView: View {
                                             .font(.caption2)
                                             .padding(.horizontal, 7)
                                             .padding(.vertical, 3)
-                                            .background(patient.status == "active" ? .green.opacity(0.12) : .orange.opacity(0.12))
+                                            .background(patient.status == "active" ? Color.istsehGreenSoft : .orange.opacity(0.12))
                                             .clipShape(Capsule())
-                                            .foregroundStyle(patient.status == "active" ? .green : .orange)
+                                            .foregroundStyle(patient.status == "active" ? Color.istsehGreen : .orange)
                                     }
                                 }
 
@@ -73,7 +73,7 @@ struct FamilySettingsView: View {
                         Image(systemName: "person.badge.plus")
                         Text("Add Family Member")
                     }
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(Color.istsehGreen)
                 }
             } footer: {
                 Text("Adding a family member allows you to manage their medications and schedule.")
@@ -141,8 +141,14 @@ struct FamilySettingsView: View {
     }
 }
 
+enum CareProfileMenuPresentation {
+    case compact
+    case pill
+}
+
 struct CareProfileMenu: View {
     @EnvironmentObject var settings: AppSettings
+    var presentation: CareProfileMenuPresentation = .compact
     var onSelectionChanged: () -> Void
 
     @State private var patients: [FamilySettingsView.PatientProfile] = []
@@ -155,7 +161,10 @@ struct CareProfileMenu: View {
             Button {
                 selectSelf()
             } label: {
-                Label("My profile", systemImage: settings.activePatientID == nil ? "checkmark.circle.fill" : "person.circle")
+                Label(
+                    "My Profile",
+                    systemImage: settings.activePatientID == nil ? "checkmark.circle.fill" : "person.circle"
+                )
             }
 
             if isLoading {
@@ -173,17 +182,35 @@ struct CareProfileMenu: View {
                 }
             }
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: settings.activePatientID == nil ? "person.2.circle.fill" : "person.crop.circle.badge.checkmark")
-                if settings.activePatientID != nil {
-                    Text(settings.activeCareDisplayName)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                }
-            }
-            .foregroundStyle(.teal)
+            menuLabel
         }
         .task { await loadPatients() }
+    }
+
+    @ViewBuilder
+    private var menuLabel: some View {
+        switch presentation {
+        case .compact:
+            HStack(spacing: 5) {
+                Image(systemName: settings.activePatientID == nil ? "person.circle.fill" : "person.crop.circle.badge.checkmark")
+                Text(settings.activePatientID == nil ? "My Profile" : settings.activeCareDisplayName)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+            }
+            .foregroundStyle(Color.istsehGreen)
+        case .pill:
+            HStack(spacing: 7) {
+                Image(systemName: settings.activePatientID == nil ? "person.circle.fill" : "person.crop.circle.badge.checkmark")
+                Text(settings.activePatientID == nil ? "My Profile" : "Managing \(settings.activeCareDisplayName)")
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+            }
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(Color.istsehGreen)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .background(Color.istsehGreenSoft, in: Capsule())
+        }
     }
 
     private func selectSelf() {
@@ -342,7 +369,7 @@ struct ManagedPatientSettingsView: View {
                 Section {
                     Text(msg)
                         .font(.footnote)
-                        .foregroundStyle(msg.contains("Success") ? .green : .red)
+                        .foregroundStyle(msg.contains("Success") ? Color.istsehGreen : .red)
                 }
             }
         }
@@ -480,7 +507,7 @@ struct AddFamilyMemberView: View {
                                 UIPasteboard.general.string = code
                             }
                             .buttonStyle(.bordered)
-                            .tint(.blue)
+                            .tint(Color.istsehGreen)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 20)

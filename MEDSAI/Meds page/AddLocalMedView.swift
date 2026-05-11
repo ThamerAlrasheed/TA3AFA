@@ -187,7 +187,7 @@ struct AddLocalMedView: View {
                     Button(action: suggestSchedule) {
                         HStack {
                             if isParsingSchedule {
-                                ProgressView().tint(.accentColor)
+                                ProgressView().tint(Color.istsehGreen)
                             } else {
                                 Image(systemName: "sparkles")
                                 Text("Suggest Schedule")
@@ -205,7 +205,7 @@ struct AddLocalMedView: View {
                     Section {
                         VStack(alignment: .leading, spacing: 12) {
                             HStack {
-                                Image(systemName: "info.circle.fill").foregroundColor(.accentColor)
+                                Image(systemName: "info.circle.fill").foregroundColor(Color.istsehGreen)
                                 Text("Suggested Schedule").bold()
                             }
                             
@@ -249,7 +249,7 @@ struct AddLocalMedView: View {
                                     .bold()
                                     .frame(maxWidth: .infinity)
                                     .padding(.vertical, 8)
-                                    .background(Color.accentColor)
+                                    .background(Color.istsehGreen)
                                     .foregroundColor(.white)
                                     .cornerRadius(8)
                             }

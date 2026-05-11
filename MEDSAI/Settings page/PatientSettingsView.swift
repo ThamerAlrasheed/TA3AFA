@@ -12,7 +12,7 @@ struct PatientSettingsView: View {
                         Image(systemName: "person.crop.circle.fill")
                             .resizable()
                             .frame(width: 60, height: 60)
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(Color.istsehGreen)
                         
                         VStack(alignment: .leading, spacing: 4) {
                             Text("\(settings.firstName) \(settings.lastName)")
@@ -28,7 +28,7 @@ struct PatientSettingsView: View {
                 Section(header: Text("Connected Caregiver")) {
                     HStack {
                         Image(systemName: "person.2.fill")
-                            .foregroundStyle(.teal)
+                            .foregroundStyle(Color.istsehGreen)
                         Text("Your Caregiver")
                         Spacer()
                         Text("Active")
@@ -42,7 +42,7 @@ struct PatientSettingsView: View {
                         NavigationLink(destination: LinkedDevicesView(patientId: pid, patientName: settings.activePatientName ?? "Patient")) {
                             HStack {
                                 Image(systemName: "iphone.badge.checkmark")
-                                    .foregroundStyle(.blue)
+                                    .foregroundStyle(Color.istsehGreen)
                                 Text("Linked Devices")
                             }
                         }

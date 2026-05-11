@@ -6,6 +6,11 @@ enum UserRole: String, Codable {
     case regular, caregiver, patient
 }
 
+extension Color {
+    static let istsehGreen = Color(red: 0.13, green: 0.72, blue: 0.36)
+    static let istsehGreenSoft = Color.istsehGreen.opacity(0.14)
+}
+
 final class AppSettings: ObservableObject {
     static let shared = AppSettings()
 
@@ -24,6 +29,10 @@ final class AppSettings: ObservableObject {
             }
         }
     }
+    /// Single source of truth for care-profile context.
+    /// nil means My Profile/self; a value means a managed family patient.
+    /// Settings, Meds, Routine, Reminders, and Medical Profile all read this
+    /// value and the mirrored PatientSessionStore/SupabaseManager context.
     @Published var activePatientID: String? {
         didSet {
             let patientID = activePatientID.flatMap { UUID(uuidString: $0) }
@@ -196,7 +205,7 @@ final class AppSettings: ObservableObject {
         if !firstName.isEmpty {
             return firstName
         }
-        return "Family member"
+        return "My Profile"
     }
 
     // MARK: - Supabase sync
@@ -209,9 +218,25 @@ final class AppSettings: ObservableObject {
         let wasActingAtRequestStart = supabase.activePatientID != nil
 
         do {
-            // When a caregiver has an active patient, use the Edge Function so RLS doesn't block
+            // Caregiver selected-patient and care-code patient sessions use the
+            // patient-profile function so all patient-scoped writes resolve from
+            // the shared active patient/device-token context.
             if let activePatientID = supabase.activePatientID {
                 let patientIdStr = activePatientID.uuidString.lowercased()
+                let routine = try await DrugInfo.getPatientRoutine(patientId: patientIdStr)
+                guard supabase.currentUserID == requestedUserID else { return }
+                isApplyingRemote = true
+                breakfast = parseTime(routine.breakfast_time, defaultHour: 8)
+                lunch     = parseTime(routine.lunch_time,     defaultHour: 13)
+                dinner    = parseTime(routine.dinner_time,    defaultHour: 19)
+                bedtime   = parseTime(routine.bedtime,        defaultHour: 23)
+                wakeup    = parseTime(routine.wakeup_time,    defaultHour: 7)
+                isApplyingRemote = false
+                return
+            }
+
+            if supabase.isPatientMode {
+                let patientIdStr = uid.uuidString.lowercased()
                 let routine = try await DrugInfo.getPatientRoutine(patientId: patientIdStr)
                 guard supabase.currentUserID == requestedUserID else { return }
                 isApplyingRemote = true
@@ -278,7 +303,8 @@ final class AppSettings: ObservableObject {
         await MainActor.run { routineSaveStatus = .saving }
 
         do {
-            // When a caregiver has an active patient, save via Edge Function (bypasses RLS)
+            // Caregiver selected-patient and care-code patient sessions save via
+            // patient-profile so stale account/device context cannot leak through.
             if let activePatientID = supabase.activePatientID {
                 let patientIdStr = activePatientID.uuidString.lowercased()
                 let routine = DrugInfo.PatientRoutine(
@@ -289,6 +315,15 @@ final class AppSettings: ObservableObject {
                     wakeup_time: formatTime(wakeup, defaultHour: 7)
                 )
                 try await DrugInfo.savePatientRoutine(patientId: patientIdStr, routine: routine)
+            } else if supabase.isPatientMode {
+                let routine = DrugInfo.PatientRoutine(
+                    breakfast_time: formatTime(breakfast, defaultHour: 8),
+                    lunch_time: formatTime(lunch, defaultHour: 13),
+                    dinner_time: formatTime(dinner, defaultHour: 19),
+                    bedtime: formatTime(bedtime, defaultHour: 23),
+                    wakeup_time: formatTime(wakeup, defaultHour: 7)
+                )
+                try await DrugInfo.savePatientRoutine(patientId: uid.uuidString.lowercased(), routine: routine)
             } else {
                 // Own routine: direct DB update
                 let data: [String: String] = [

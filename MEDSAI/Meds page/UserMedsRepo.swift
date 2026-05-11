@@ -395,6 +395,7 @@ final class UserMedsRepo: ObservableObject {
         let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
+
 }
 
 extension Notification.Name {
