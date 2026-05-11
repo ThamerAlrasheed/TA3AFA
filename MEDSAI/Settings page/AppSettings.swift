@@ -66,6 +66,9 @@ final class AppSettings: ObservableObject {
     @Published var appearanceMode: AppearanceMode
     @Published var sessionRevokedMessage: String? = nil
 
+    enum RoutineSaveStatus { case idle, saving, saved, failed }
+    @Published var routineSaveStatus: RoutineSaveStatus = .idle
+
     /// Returns the ColorScheme to pass to `.preferredColorScheme()`.
     /// `nil` means follow the system setting.
     var colorScheme: ColorScheme? {
@@ -272,44 +275,46 @@ final class AppSettings: ObservableObject {
     func saveRoutineToSupabase() async {
         guard let uid = supabase.currentUserID else { return }
 
-        // When a caregiver has an active patient, save via Edge Function (bypasses RLS)
-        if let activePatientID = supabase.activePatientID {
-            let patientIdStr = activePatientID.uuidString.lowercased()
-            let routine = DrugInfo.PatientRoutine(
-                breakfast_time: formatTime(breakfast, defaultHour: 8),
-                lunch_time: formatTime(lunch, defaultHour: 13),
-                dinner_time: formatTime(dinner, defaultHour: 19),
-                bedtime: formatTime(bedtime, defaultHour: 23),
-                wakeup_time: formatTime(wakeup, defaultHour: 7)
-            )
-            do {
-                try await DrugInfo.savePatientRoutine(patientId: patientIdStr, routine: routine)
-            } catch {
-                print("⚠️ saveRoutineToSupabase (patient) failed:", error.localizedDescription)
-            }
-            return
-        }
-
-        // Own routine: direct DB update
-        let data: [String: String] = [
-            "breakfast_time": formatTime(breakfast, defaultHour: 8),
-            "lunch_time":     formatTime(lunch,     defaultHour: 13),
-            "dinner_time":    formatTime(dinner,    defaultHour: 19),
-            "bedtime":        formatTime(bedtime,   defaultHour: 23),
-            "wakeup_time":    formatTime(wakeup,    defaultHour: 7)
-        ]
+        await MainActor.run { routineSaveStatus = .saving }
 
         do {
-            _ = try await self.supabase.retry {
-                try await self.supabase.client
-                    .from("users")
-                    .update(data)
-                    .eq("id", value: uid.uuidString)
-                    .execute()
+            // When a caregiver has an active patient, save via Edge Function (bypasses RLS)
+            if let activePatientID = supabase.activePatientID {
+                let patientIdStr = activePatientID.uuidString.lowercased()
+                let routine = DrugInfo.PatientRoutine(
+                    breakfast_time: formatTime(breakfast, defaultHour: 8),
+                    lunch_time: formatTime(lunch, defaultHour: 13),
+                    dinner_time: formatTime(dinner, defaultHour: 19),
+                    bedtime: formatTime(bedtime, defaultHour: 23),
+                    wakeup_time: formatTime(wakeup, defaultHour: 7)
+                )
+                try await DrugInfo.savePatientRoutine(patientId: patientIdStr, routine: routine)
+            } else {
+                // Own routine: direct DB update
+                let data: [String: String] = [
+                    "breakfast_time": formatTime(breakfast, defaultHour: 8),
+                    "lunch_time":     formatTime(lunch,     defaultHour: 13),
+                    "dinner_time":    formatTime(dinner,    defaultHour: 19),
+                    "bedtime":        formatTime(bedtime,   defaultHour: 23),
+                    "wakeup_time":    formatTime(wakeup,    defaultHour: 7)
+                ]
+                _ = try await self.supabase.retry {
+                    try await self.supabase.client
+                        .from("users")
+                        .update(data)
+                        .eq("id", value: uid.uuidString)
+                        .execute()
+                }
             }
+            await MainActor.run { routineSaveStatus = .saved }
         } catch {
             print("⚠️ saveRoutineToSupabase failed:", error.localizedDescription)
+            await MainActor.run { routineSaveStatus = .failed }
         }
+
+        // Reset to idle after 2.5 s so the banner fades away
+        try? await Task.sleep(nanoseconds: 2_500_000_000)
+        await MainActor.run { routineSaveStatus = .idle }
     }
 
     // MARK: - Time helpers

@@ -354,10 +354,9 @@ struct SettingsView: View {
 // MARK: - Reminder Settings Screen
 
 private struct ReminderSettingsView: View {
-    @AppStorage("notify.enabled")    private var notificationsEnabled: Bool = true
-    @AppStorage("notify.doses")      private var notifyDoses: Bool = true
-    @AppStorage("notify.appts")      private var notifyAppointments: Bool = true
-    @AppStorage("notify.followUp15") private var notifyFollowUp15: Bool = true
+    @AppStorage("notify.enabled") private var notificationsEnabled: Bool = true
+    @AppStorage("notify.doses")   private var notifyDoses: Bool = true
+    @AppStorage("notify.appts")   private var notifyAppointments: Bool = true
 
     var body: some View {
         Form {
@@ -374,7 +373,6 @@ private struct ReminderSettingsView: View {
                         } else {
                             notifyDoses = false
                             notifyAppointments = false
-                            notifyFollowUp15 = false
                             UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
                         }
                     }
@@ -385,9 +383,6 @@ private struct ReminderSettingsView: View {
 
                 Toggle("Appointment reminders", isOn: $notifyAppointments)
                     .disabled(!notificationsEnabled)
-
-                Toggle("Follow-up after 15 minutes", isOn: $notifyFollowUp15)
-                    .disabled(!notificationsEnabled || !notifyDoses)
             }
         }
         .navigationTitle("Reminders")

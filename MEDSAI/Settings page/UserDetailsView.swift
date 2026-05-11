@@ -28,7 +28,7 @@ struct RoutineSettingsView: View {
             }
 
             Section(
-                footer: Text("Changes are saved automatically. Medication reminders are refreshed whenever these times change.")
+                footer: Text("Changes save automatically. Medication reminders are refreshed when these times change.")
             ) {
                 EmptyView()
             }
@@ -38,6 +38,59 @@ struct RoutineSettingsView: View {
         .tint(.orange)
         .onAppear {
             Task { await settings.loadRoutineFromSupabase() }
+        }
+        .overlay(alignment: .bottom) {
+            RoutineSaveToast(status: settings.routineSaveStatus)
+        }
+    }
+}
+
+// MARK: - Save status toast
+
+private struct RoutineSaveToast: View {
+    let status: AppSettings.RoutineSaveStatus
+
+    private var isVisible: Bool { status != .idle }
+
+    private var icon: String {
+        switch status {
+        case .saving: return "arrow.triangle.2.circlepath"
+        case .saved:  return "checkmark.circle.fill"
+        case .failed: return "exclamationmark.triangle.fill"
+        case .idle:   return ""
+        }
+    }
+
+    private var label: String {
+        switch status {
+        case .saving: return "Saving…"
+        case .saved:  return "Saved"
+        case .failed: return "Save failed"
+        case .idle:   return ""
+        }
+    }
+
+    private var tint: Color {
+        switch status {
+        case .saving: return .orange
+        case .saved:  return .green
+        case .failed: return .red
+        case .idle:   return .clear
+        }
+    }
+
+    var body: some View {
+        if isVisible {
+            Label(label, systemImage: icon)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 10)
+                .background(tint, in: Capsule())
+                .shadow(color: .black.opacity(0.18), radius: 8, y: 4)
+                .padding(.bottom, 16)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+                .animation(.spring(response: 0.35, dampingFraction: 0.75), value: status)
         }
     }
 }

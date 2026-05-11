@@ -78,10 +78,16 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
 
     // MARK: - Reminders Lifecycle
 
+    // MARK: - UserDefaults toggle helpers (default true if key never set)
+    private func boolSetting(_ key: String) -> Bool {
+        UserDefaults.standard.object(forKey: key) as? Bool ?? true
+    }
+
     func updateReminders(for med: LocalMed) {
         cancelReminders(for: med.id)
         guard !med.isArchived else { return }
-        
+        guard boolSetting("notify.enabled"), boolSetting("notify.doses") else { return }
+
         let times = med.dosageTimes.compactMap { t -> DateComponents? in
             let parts = t.split(separator: ":")
             guard parts.count >= 2 else { return nil }
@@ -120,6 +126,7 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
 
     func updateAppointmentReminders(for appt: Appointment, settings: AppSettings) {
         cancelAppointmentReminders(for: appt.id)
+        guard boolSetting("notify.enabled"), boolSetting("notify.appts") else { return }
         let cal = Calendar.current
         let t = appt.date
         
