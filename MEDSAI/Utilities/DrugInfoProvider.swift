@@ -501,7 +501,15 @@ enum DrugInfo: DrugInfoProvider {
     }
     
     // MARK: - Medical Profile
-    
+
+    struct PatientRoutine: Codable {
+        var breakfast_time: String?
+        var lunch_time: String?
+        var dinner_time: String?
+        var bedtime: String?
+        var wakeup_time: String?
+    }
+
     private struct ProfileRequest: Encodable {
         let action: String
         let patient_id: String?
@@ -509,6 +517,14 @@ enum DrugInfo: DrugInfoProvider {
         let allergy: Allergy?
         let condition: Condition?
         let id: String?
+        let routine: PatientRoutine?
+    }
+
+    private struct RoutineOnlyRequest: Encodable {
+        let action: String
+        let patient_id: String?
+        let device_token: String?
+        let routine: PatientRoutine?
     }
     
     private static func invokeProfileFunction<T: Decodable>(_ request: ProfileRequest) async throws -> T {
@@ -537,7 +553,8 @@ enum DrugInfo: DrugInfoProvider {
             device_token: context.deviceToken,
             allergy: nil,
             condition: nil,
-            id: nil
+            id: nil,
+            routine: nil
         ))
         return res.allergies
     }
@@ -551,7 +568,8 @@ enum DrugInfo: DrugInfoProvider {
             device_token: context.deviceToken,
             allergy: allergy,
             condition: nil,
-            id: nil
+            id: nil,
+            routine: nil
         ))
         NotificationCenter.default.post(name: .medicalProfileChanged, object: nil)
     }
@@ -565,7 +583,8 @@ enum DrugInfo: DrugInfoProvider {
             device_token: context.deviceToken,
             allergy: nil,
             condition: nil,
-            id: id
+            id: id,
+            routine: nil
         ))
         NotificationCenter.default.post(name: .medicalProfileChanged, object: nil)
     }
@@ -579,7 +598,8 @@ enum DrugInfo: DrugInfoProvider {
             device_token: context.deviceToken,
             allergy: nil,
             condition: nil,
-            id: nil
+            id: nil,
+            routine: nil
         ))
         return res.conditions
     }
@@ -593,7 +613,8 @@ enum DrugInfo: DrugInfoProvider {
             device_token: context.deviceToken,
             allergy: nil,
             condition: condition,
-            id: nil
+            id: nil,
+            routine: nil
         ))
         NotificationCenter.default.post(name: .medicalProfileChanged, object: nil)
     }
@@ -607,9 +628,59 @@ enum DrugInfo: DrugInfoProvider {
             device_token: context.deviceToken,
             allergy: nil,
             condition: nil,
-            id: id
+            id: id,
+            routine: nil
         ))
         NotificationCenter.default.post(name: .medicalProfileChanged, object: nil)
+    }
+
+    static func getPatientRoutine(patientId: String) async throws -> PatientRoutine {
+        struct Res: Decodable { let routine: PatientRoutine }
+        let context = resolvedPatientRequestContext(patientId: patientId, deviceToken: SupabaseManager.shared.patientDeviceToken)
+        do {
+            var headers = ["apikey": SupabaseManager.shared.supabaseKey]
+            if let accessToken = SupabaseManager.shared.client.auth.currentSession?.accessToken {
+                headers["Authorization"] = "Bearer \(accessToken)"
+            }
+            let req = RoutineOnlyRequest(
+                action: "get_routine",
+                patient_id: context.patientId,
+                device_token: context.deviceToken,
+                routine: nil
+            )
+            let res: Res = try await SupabaseManager.shared.client.functions.invoke(
+                "patient-profile",
+                options: .init(method: .post, headers: headers, body: req)
+            )
+            return res.routine
+        } catch {
+            print("Supabase get_routine error: \(error)")
+            throw error
+        }
+    }
+
+    static func savePatientRoutine(patientId: String, routine: PatientRoutine) async throws {
+        struct Res: Decodable { let success: Bool }
+        let context = resolvedPatientRequestContext(patientId: patientId, deviceToken: SupabaseManager.shared.patientDeviceToken)
+        do {
+            var headers = ["apikey": SupabaseManager.shared.supabaseKey]
+            if let accessToken = SupabaseManager.shared.client.auth.currentSession?.accessToken {
+                headers["Authorization"] = "Bearer \(accessToken)"
+            }
+            let req = RoutineOnlyRequest(
+                action: "update_routine",
+                patient_id: context.patientId,
+                device_token: context.deviceToken,
+                routine: routine
+            )
+            let _: Res = try await SupabaseManager.shared.client.functions.invoke(
+                "patient-profile",
+                options: .init(method: .post, headers: headers, body: req)
+            )
+        } catch {
+            print("Supabase update_routine error: \(error)")
+            throw error
+        }
     }
 
     private static func resolvedPatientRequestContext(patientId: String?, deviceToken: String?) -> PatientRequestContext {

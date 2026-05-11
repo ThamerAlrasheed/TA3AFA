@@ -53,6 +53,7 @@ struct SettingsView: View {
                     }
                 }
                 familyMembersSection
+                medicalProfileSection
                 profileSection
                 dailyRoutineSection
                 notificationsSection
@@ -138,9 +139,45 @@ struct SettingsView: View {
         }
     }
 
+    private var medicalProfileSection: some View {
+        Section(header: Text("Medical Profile")) {
+            NavigationLink {
+                MedicalProfileView(
+                    patientId: supabase.currentUserID?.uuidString.lowercased(),
+                    patientName: settings.activePatientName ?? (settings.firstName.isEmpty ? "My" : settings.firstName)
+                )
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "cross.case.fill")
+                        .foregroundStyle(.red)
+                        .frame(width: 32)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Allergies & Conditions")
+                        if let patientName = settings.activePatientName {
+                            Text("Managing \(patientName)'s profile")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("Manage known allergies and chronic conditions")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private var dailyRoutineSection: some View {
-        Section(
-            header: Text("Daily routine"),
+        let patientName = settings.activePatientName
+        return Section(
+            header: Group {
+                if let name = patientName {
+                    Text("Daily Routine — \(name)")
+                } else {
+                    Text("Daily routine")
+                }
+            },
             footer: Text("These times help schedule doses and appointment reminders.")
         ) {
             TimeRow(title: "Wake time", comps: $settings.wakeup)

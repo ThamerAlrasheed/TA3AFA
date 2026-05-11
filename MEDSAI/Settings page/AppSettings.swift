@@ -206,6 +206,22 @@ final class AppSettings: ObservableObject {
         let wasActingAtRequestStart = supabase.activePatientID != nil
 
         do {
+            // When a caregiver has an active patient, use the Edge Function so RLS doesn't block
+            if let activePatientID = supabase.activePatientID {
+                let patientIdStr = activePatientID.uuidString.lowercased()
+                let routine = try await DrugInfo.getPatientRoutine(patientId: patientIdStr)
+                guard supabase.currentUserID == requestedUserID else { return }
+                isApplyingRemote = true
+                breakfast = parseTime(routine.breakfast_time, defaultHour: 8)
+                lunch     = parseTime(routine.lunch_time,     defaultHour: 13)
+                dinner    = parseTime(routine.dinner_time,    defaultHour: 19)
+                bedtime   = parseTime(routine.bedtime,        defaultHour: 23)
+                wakeup    = parseTime(routine.wakeup_time,    defaultHour: 7)
+                isApplyingRemote = false
+                return
+            }
+
+            // Own routine: direct DB query (auth.uid() matches own row)
             struct UserRow: Decodable {
                 let breakfast_time: String?
                 let lunch_time: String?
@@ -233,15 +249,14 @@ final class AppSettings: ObservableObject {
             isApplyingRemote = true
             breakfast = parseTime(row.breakfast_time, defaultHour: 8)
             lunch     = parseTime(row.lunch_time,     defaultHour: 13)
-            dinner    = parseTime(row.dinner_time,     defaultHour: 19)
-            bedtime   = parseTime(row.bedtime,         defaultHour: 23)
-            wakeup    = parseTime(row.wakeup_time,     defaultHour: 7)
+            dinner    = parseTime(row.dinner_time,    defaultHour: 19)
+            bedtime   = parseTime(row.bedtime,        defaultHour: 23)
+            wakeup    = parseTime(row.wakeup_time,    defaultHour: 7)
 
             if let fn = row.first_name { firstName = fn }
             if let ln = row.last_name  { lastName = ln }
-            
+
             // Only update role if we are NOT currently acting as a patient
-            // (prevents caregivers from being locked into the patient role UI)
             if let r = row.role, !wasActingAtRequestStart, supabase.activePatientID == nil {
                 role = UserRole(rawValue: r) ?? .regular
             }
@@ -257,6 +272,25 @@ final class AppSettings: ObservableObject {
     func saveRoutineToSupabase() async {
         guard let uid = supabase.currentUserID else { return }
 
+        // When a caregiver has an active patient, save via Edge Function (bypasses RLS)
+        if let activePatientID = supabase.activePatientID {
+            let patientIdStr = activePatientID.uuidString.lowercased()
+            let routine = DrugInfo.PatientRoutine(
+                breakfast_time: formatTime(breakfast, defaultHour: 8),
+                lunch_time: formatTime(lunch, defaultHour: 13),
+                dinner_time: formatTime(dinner, defaultHour: 19),
+                bedtime: formatTime(bedtime, defaultHour: 23),
+                wakeup_time: formatTime(wakeup, defaultHour: 7)
+            )
+            do {
+                try await DrugInfo.savePatientRoutine(patientId: patientIdStr, routine: routine)
+            } catch {
+                print("⚠️ saveRoutineToSupabase (patient) failed:", error.localizedDescription)
+            }
+            return
+        }
+
+        // Own routine: direct DB update
         let data: [String: String] = [
             "breakfast_time": formatTime(breakfast, defaultHour: 8),
             "lunch_time":     formatTime(lunch,     defaultHour: 13),

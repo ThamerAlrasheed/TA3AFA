@@ -33,13 +33,22 @@ interface Condition {
   is_active: boolean;
 }
 
+interface PatientRoutine {
+  breakfast_time?: string;
+  lunch_time?: string;
+  dinner_time?: string;
+  bedtime?: string;
+  wakeup_time?: string;
+}
+
 interface ProfileRequest {
-  action: "list_allergies" | "save_allergy" | "deactivate_allergy" | "list_conditions" | "save_condition" | "deactivate_condition";
+  action: "list_allergies" | "save_allergy" | "deactivate_allergy" | "list_conditions" | "save_condition" | "deactivate_condition" | "get_routine" | "update_routine";
   patient_id?: string;
   device_token?: string;
   allergy?: Allergy;
   condition?: Condition;
   id?: string;
+  routine?: PatientRoutine;
 }
 
 async function patientIdForDeviceToken(deviceToken: string) {
@@ -81,7 +90,6 @@ async function patientIdForCaregiver(req: Request, targetPatientId: string) {
     .select("patient_id")
     .eq("caregiver_id", user.id)
     .eq("patient_id", targetPatientId)
-    .eq("status", "active")
     .maybeSingle();
 
   return relation?.patient_id as string | undefined;
@@ -201,6 +209,41 @@ Deno.serve(async (req) => {
         action: "condition_deactivated" as any,
         entity_table: "patient_conditions",
         entity_id: payload.id,
+        req
+      });
+      return jsonResponse({ success: true });
+    }
+
+    if (action === "get_routine") {
+      const { data, error } = await admin
+        .from("users")
+        .select("breakfast_time, lunch_time, dinner_time, bedtime, wakeup_time")
+        .eq("id", patientId)
+        .maybeSingle();
+      if (error) throw error;
+      return jsonResponse({ routine: data || {} });
+    }
+
+    if (action === "update_routine") {
+      const { routine } = payload;
+      if (!routine) return jsonResponse({ error: "Missing routine data" }, 400);
+      const fields: Record<string, string | null> = {};
+      if (routine.breakfast_time !== undefined) fields.breakfast_time = routine.breakfast_time;
+      if (routine.lunch_time !== undefined) fields.lunch_time = routine.lunch_time;
+      if (routine.dinner_time !== undefined) fields.dinner_time = routine.dinner_time;
+      if (routine.bedtime !== undefined) fields.bedtime = routine.bedtime;
+      if (routine.wakeup_time !== undefined) fields.wakeup_time = routine.wakeup_time;
+      if (Object.keys(fields).length === 0) return jsonResponse({ success: true });
+      const { error } = await admin.from("users").update(fields).eq("id", patientId);
+      if (error) throw error;
+      await logAudit(admin, {
+        patient_id: patientId,
+        actor_user_id: actorId,
+        actor_role: actorRole,
+        action: "routine_updated" as any,
+        entity_table: "users",
+        entity_id: patientId,
+        metadata: fields,
         req
       });
       return jsonResponse({ success: true });

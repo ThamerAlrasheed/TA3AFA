@@ -87,7 +87,6 @@ async function patientIdForCaregiver(supabaseUrl: string, supabaseAnonKey: strin
     .select("patient_id")
     .eq("caregiver_id", authData.user.id)
     .eq("patient_id", targetPatientId)
-    .eq("status", "active")
     .limit(1);
 
   if (error) throw new Error(error.message);

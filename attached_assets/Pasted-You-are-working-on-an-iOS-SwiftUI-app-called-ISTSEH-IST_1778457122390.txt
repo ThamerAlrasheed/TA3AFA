@@ -1,0 +1,510 @@
+You are working on an iOS SwiftUI app called ISTSEH / استصح.
+
+ISTSEH is a medication care app for patients and caregivers. It uses:
+- SwiftUI iOS app
+- Supabase Postgres
+- Supabase Edge Functions
+- Patient mode using device_token
+- Caregiver mode using Supabase Auth + active patient_id
+- Keychain for sensitive session storage
+
+Important:
+The caregiver dropdown/context is now working again. Do not break it.
+The active patient context must remain consistent across all pages.
+
+Current problems to fix:
+1. Allergy detection is still not showing in the real Add Medication flow.
+2. Users need to be able to edit their own allergies and chronic diseases.
+3. Caregivers need to be able to edit allergies, chronic diseases, and routine/sleep schedule for their family members.
+4. Smart scheduling must use the selected patient’s routine, not the caregiver’s routine.
+5. Chronic disease medication warnings are not implemented yet. Do not fake them.
+
+Do not work on:
+- branding/legal
+- care-code hashing
+- Keychain migration
+- image-to-drug
+- drug-intel source grounding
+- parse-schedule unless strictly needed for compatibility
+- device revocation unless strictly needed for auth compatibility
+
+Main goal:
+Make patient medical profile and routine settings fully editable by the correct user/caregiver, and make Add Medication allergy warnings work end-to-end for the selected patient.
+
+Files to review:
+1. MEDSAI/App/MediScheduleApp.swift
+2. MEDSAI/App/RootTabView.swift
+3. MEDSAI/Services/SupabaseManager.swift
+4. MEDSAI/Services/PatientSessionStore.swift
+5. MEDSAI/Settings page/AppSettings.swift
+6. MEDSAI/Settings page/SettingsView.swift
+7. MEDSAI/Settings page/PatientSettingsView.swift
+8. MEDSAI/Settings page/MedicalProfileView.swift
+9. MEDSAI/Meds page/AddLocalMedView.swift
+10. MEDSAI/Meds page/UserMedsRepo.swift
+11. MEDSAI/Meds page/MedViews.swift
+12. MEDSAI/Meds page/LocalMed.swift
+13. MEDSAI/Utilities/DrugInfoProvider.swift
+14. MEDSAI/Utilities/SafetyWarningView.swift
+15. MEDSAI/Utilities/Helpers.swift
+16. MEDSAI/Utilities/NotificationsManager.swift
+17. supabase/functions/check-interactions/index.ts
+18. supabase/functions/patient-profile/index.ts
+19. supabase/functions/patient-medications/index.ts
+20. supabase/functions/_shared/drug-utils.ts
+21. supabase/schema_public.sql
+22. supabase/migrations/*.sql
+
+====================================================
+PART A — Fix real allergy detection in Add Medication
+====================================================
+
+Observed live issue:
+- Duplicate warnings work.
+- Example: Ibuprofen + Motrin shows Duplicate warning.
+- But allergy warnings are still not showing in the actual Add Medication flow.
+- Example: If the active patient has allergy Brufen / Ibuprofen / NSAID and I add Ibuprofen, I only see Duplicate, not Allergy.
+- This is wrong.
+
+Expected:
+If the selected active patient has allergy:
+- Brufen
+- Ibuprofen
+- NSAID
+- NSAIDs
+- Nonsteroidal anti-inflammatory
+
+and the user adds:
+- Ibuprofen
+- Motrin
+- Advil
+- Brufen
+- Nurofen
+
+then Add Medication must show:
+- ALLERGY_CONFLICT
+- severity: contraindicated
+- can_continue: false
+- Save must be blocked
+
+Required investigation:
+1. In AddLocalMedView, capture the exact active patient context:
+   - activePatientID
+   - activePatientName
+   - caregiver mode or patient mode
+   - whether device_token is being sent
+   - whether Authorization header is being sent
+2. Confirm AddLocalMedView uses the same active patient shown in the caregiver dropdown.
+3. Confirm MedicalProfileView writes allergies to that same patient.
+4. Confirm check-interactions queries patient_allergies for that same patient.
+5. Confirm the live Add Medication request uses the same patient context.
+
+Important auth rules:
+- Patient mode:
+  - use device_token
+  - backend resolves patient from device token
+- Caregiver mode:
+  - use Authorization header + patient_id
+  - do NOT send stale device_token if caregiver mode is active
+- If both patient_id and stale device_token are sent, backend may prioritize the wrong patient. Avoid this.
+
+Required backend allergy matching:
+Normalize both allergy names and medication names/ingredients.
+
+Canonical alias map must support:
+- brufen -> ibuprofen
+- ibuprofen -> ibuprofen
+- advil -> ibuprofen
+- motrin -> ibuprofen
+- nurofen -> ibuprofen
+- nsaid -> nsaid class
+- nsaids -> nsaid class
+- nonsteroidal anti-inflammatory -> nsaid class
+- nonsteroidal anti inflammatory drug epc -> nsaid class
+- penicillin -> penicillin class
+- penicillins -> penicillin class
+- amoxicillin -> penicillin class member
+- augmentin -> amoxicillin / penicillin class
+- acetaminophen -> acetaminophen
+- paracetamol -> acetaminophen
+- panadol -> acetaminophen
+- tylenol -> acetaminophen
+
+Expected allergy behavior:
+1. Allergy Brufen + medication Ibuprofen:
+   - ALLERGY_CONFLICT
+   - contraindicated
+   - can_continue false
+   - Save blocked
+
+2. Allergy Ibuprofen + medication Motrin:
+   - ALLERGY_CONFLICT
+   - Save blocked
+
+3. Allergy NSAID + medication Ibuprofen:
+   - ALLERGY_CONFLICT
+   - Save blocked unless policy intentionally treats class allergies differently
+
+4. Allergy Penicillin + medication Amoxicillin:
+   - ALLERGY_CONFLICT
+   - Save blocked
+
+5. Duplicate + allergy together:
+   - Show both warnings
+   - Save blocked because allergy is contraindicated
+
+Required iOS filtering:
+Add Medication should not show unrelated old warnings, but it must never hide allergy conflicts involving the medication being added.
+
+A warning is relevant to the new medication if any of these match:
+- affected_medication_ids contains pending new medication id
+- warning.meds contains the new medication name
+- warning.ingredients overlaps with canonical ingredients inferred from the new medication name/ingredients
+- warning.type == ALLERGY_CONFLICT and canonical allergy/ingredient overlap exists
+
+If any visible warning has:
+- severity == contraindicated
+or
+- can_continue == false
+
+then SafetyWarningView must:
+- hide “I Understand, Save Anyway”
+- show only Go Back / Cannot Save
+- prevent save
+
+Tests required:
+1. Active patient allergy: Brufen. Add medication: Ibuprofen.
+   Expected: Allergy conflict, save blocked.
+2. Active patient allergy: Ibuprofen. Add medication: Motrin.
+   Expected: Allergy conflict, save blocked.
+3. Active patient allergy: NSAID. Add medication: Ibuprofen.
+   Expected: Allergy conflict, save blocked.
+4. Existing med: Motrin. Active allergy: Brufen. Add medication: Ibuprofen.
+   Expected: Duplicate + allergy shown, save blocked.
+5. Existing med: Motrin. No allergy. Add medication: Ibuprofen.
+   Expected: Duplicate only, save allowed with acknowledgement.
+
+====================================================
+PART B — Editable allergies and chronic diseases
+====================================================
+
+Current requirement:
+Users must be able to edit their own allergies and chronic diseases.
+Caregivers must be able to edit allergies and chronic diseases for linked family members.
+
+Medical profile data:
+Allergies:
+- name
+- normalized_name if supported
+- severity
+- reaction
+- notes
+- is_active
+
+Conditions / chronic diseases:
+- name
+- normalized_name if supported
+- status
+- diagnosed date optional
+- notes
+- is_active
+
+Required behavior:
+1. Patient mode:
+   - Patient can view, add, edit, and deactivate their own allergies.
+   - Patient can view, add, edit, and deactivate their own chronic diseases/conditions.
+
+2. Caregiver mode:
+   - Active caregiver can view, add, edit, and deactivate the selected family member’s allergies.
+   - Active caregiver can view, add, edit, and deactivate the selected family member’s chronic diseases/conditions.
+   - Caregiver must only modify the active selected patient shown in the dropdown.
+
+3. Unauthorized:
+   - Non-caregiver cannot access another patient profile.
+   - Revoked device cannot access patient profile.
+
+4. Soft delete only:
+   - Allergies should use is_active = false.
+   - Conditions should use is_active = false and/or status = inactive.
+   - Do not hard-delete medical safety records.
+
+5. Audit logging:
+   Add or verify logs for:
+   - allergy_added
+   - allergy_updated
+   - allergy_deactivated
+   - condition_added
+   - condition_updated
+   - condition_deactivated
+
+UI requirements:
+1. MedicalProfileView should support:
+   - list allergies
+   - add allergy
+   - edit allergy
+   - deactivate/archive allergy
+   - list chronic diseases / conditions
+   - add condition
+   - edit condition
+   - deactivate/archive condition
+   - loading state
+   - empty state
+   - error state
+
+2. Make UI simple:
+   - clear labels
+   - large tap targets
+   - no medical jargon
+   - suitable for elderly/caregiver use
+
+3. Editing:
+   - User should be able to tap an allergy/condition row and edit it.
+   - There should be a clear Save button.
+   - There should be a clear Deactivate/Archive button.
+   - After save/deactivate, refresh the profile and safety warnings.
+
+4. After allergy edit:
+   - Meds page safety flags should refresh.
+   - Add Medication safety check should use updated allergy data.
+
+Required tests:
+1. Patient adds Brufen allergy.
+2. Patient edits Brufen allergy to Ibuprofen.
+3. Patient deactivates allergy.
+4. Caregiver selects Patient A and adds Brufen allergy.
+5. Caregiver selects Patient B and confirms Patient A allergy does not appear.
+6. Non-caregiver cannot edit Patient A.
+7. Revoked device cannot edit profile.
+8. Allergy edit immediately affects Add Medication warning behavior.
+
+====================================================
+PART C — Editable patient routine / sleep schedule
+====================================================
+
+Current requirement:
+Users and caregivers must be able to edit routine settings such as sleep schedule and meal times.
+
+Why:
+Smart scheduling depends on:
+- wake-up time
+- bedtime
+- breakfast time
+- lunch time
+- dinner time
+- medication reminder preference
+- appointment reminder preference
+- timezone if supported
+
+Required behavior:
+1. Patient mode:
+   - Patient can edit their own routine settings.
+
+2. Caregiver mode:
+   - Active caregiver can edit the selected family member’s routine settings.
+
+3. Non-caregiver:
+   - Cannot view or edit another patient’s routine.
+
+4. Revoked device:
+   - Cannot view or edit routine.
+
+5. Smart scheduling:
+   - Must use the selected patient’s routine.
+   - Must not accidentally use the caregiver’s routine for the patient.
+   - When caregiver switches active patient, the routine used for scheduling must change.
+
+Routine fields:
+- wake_up_time
+- bedtime
+- breakfast_time
+- lunch_time
+- dinner_time
+- medication_reminders_enabled
+- appointment_reminders_enabled
+- timezone if available or needed
+
+Backend requirements:
+1. Inspect if routine settings are currently local-only.
+2. If local-only, add safe remote persistence.
+3. Preferred options:
+   - patient_routine_settings table
+   or
+   - patient_settings table
+   or
+   - extend an existing safe patient settings table
+4. Use additive migrations only.
+5. Use Edge Function or RLS-backed access with correct auth.
+6. Suggested Edge Function:
+   patient-routine
+   Actions:
+   - get
+   - update
+
+Auth:
+- Patient device_token can get/update own routine if not revoked.
+- Active caregiver can get/update linked patient routine.
+- Non-caregiver denied.
+- Service role used only inside Edge Functions where needed.
+
+Audit:
+- routine_updated
+
+iOS requirements:
+1. Add Routine Settings screen accessible from:
+   - Settings
+   - Patient Settings
+   - Caregiver selected patient settings
+
+2. Fields:
+   - Wake-up time picker
+   - Bedtime picker
+   - Breakfast time picker
+   - Lunch time picker
+   - Dinner time picker
+   - Medication reminders toggle
+   - Appointment reminders toggle
+
+3. Save behavior:
+   - Save remote settings.
+   - Update local AppSettings/shared patient routine state.
+   - Show success message:
+     “Routine updated. Medication reminders were refreshed.”
+
+4. When routine changes:
+   - Recalculate medication schedules only for medications where is_manual_schedule == false.
+   - Do not overwrite manually edited dosage_times where is_manual_schedule == true.
+   - Refresh local notifications/reminders.
+
+5. When active patient changes:
+   - Load that patient’s routine.
+   - Use that routine for Add Medication smart scheduling.
+   - Use that routine for reminder refresh.
+
+Food rule scheduling:
+- after_food = meal time + 15 minutes
+- before_food = meal time - 15 minutes
+- with_food = meal time
+- no food rule = routine/wake/bed based
+- as-needed medications do not create recurring reminders unless user explicitly adds reminders
+
+Required tests:
+1. Patient edits own wake-up/bedtime/meal times.
+2. Caregiver edits Patient A routine.
+3. Caregiver switches to Patient B and sees different routine.
+4. Patient A routine change updates auto-generated medication reminder times.
+5. Patient A manual medication schedule is not overwritten.
+6. Patient B remains unchanged.
+7. Revoked device cannot edit routine.
+
+====================================================
+PART D — Chronic disease warning status
+====================================================
+
+Important:
+Conditions/chronic diseases can be stored and edited, but condition-drug warning engine is not implemented unless you create deterministic rules.
+
+Required:
+1. Do not generate fake condition warnings.
+2. Do not let AI guess chronic disease conflicts.
+3. If check-interactions fetches conditions but no engine exists, include source_trace:
+   patient_conditions_present_no_engine
+4. Add TODO comments for future:
+   - condition_drug_rules table
+   - CONDITION_CONFLICT warnings
+5. UI may say:
+   “Condition-based medication checks are not fully available yet.”
+   But do not show this as a medication danger warning.
+
+====================================================
+PART E — Integration requirements
+====================================================
+
+After these changes:
+1. Caregiver dropdown remains working.
+2. Active patient context is shared across:
+   - Today
+   - Schedule
+   - Meds
+   - Search
+   - Settings
+   - Medical Profile
+   - Routine Settings
+   - Add Medication
+3. Add Medication allergy detection uses the selected patient’s allergies.
+4. Meds page persistent warning badges use the selected patient’s allergies and medication list.
+5. Routine settings use selected patient’s routine.
+6. Switching patient refreshes:
+   - meds
+   - allergies
+   - conditions
+   - routine
+   - safety warnings
+   - smart schedule assumptions
+
+====================================================
+PART F — Required final report
+====================================================
+
+Report in this exact structure:
+
+1. Root cause of allergy issue
+- Was allergy inactive?
+- Was wrong patient context used?
+- Was backend matching incomplete?
+- Was iOS filtering hiding it?
+
+2. Patient context source of truth
+- Which object owns activePatientID and activePatientName
+- How Add Medication, Medical Profile, Meds Page, and Routine Settings use it
+
+3. Allergy fix
+- Backend changes
+- iOS changes
+- Alias behavior
+- Exact test request/response for Brufen allergy + Ibuprofen
+
+4. Editable Medical Profile
+- What users can edit
+- What caregivers can edit
+- Backend function/table used
+- Auth behavior
+- Soft delete behavior
+- Audit events
+
+5. Routine Settings
+- Where settings are stored
+- How patient/caregiver edit works
+- How smart scheduling uses selected patient routine
+- How routine updates refresh reminders
+- Manual schedule protection behavior
+
+6. Chronic disease status
+- Clearly say whether condition-drug warnings are implemented
+- If not implemented, confirm no fake warnings are shown
+
+7. Tests run
+- Patient edits allergy
+- Caregiver edits family member allergy
+- Brufen allergy + Ibuprofen blocks save
+- Duplicate + allergy shows both and blocks save
+- Patient edits condition
+- Caregiver edits family member condition
+- Patient edits routine
+- Caregiver edits family member routine
+- Switching patients uses correct routine/profile
+- Manual schedule not overwritten
+- Build succeeds
+
+8. Files changed
+
+9. Build result
+
+Do not claim fixed unless:
+- Brufen allergy + Ibuprofen shows ALLERGY_CONFLICT in the actual Add Medication flow.
+- Save is blocked when allergy exists.
+- Patient can edit their own allergies and chronic diseases.
+- Caregiver can edit selected family member allergies and chronic diseases.
+- Patient can edit own routine/sleep/meal schedule.
+- Caregiver can edit selected family member routine/sleep/meal schedule.
+- Smart scheduling uses the selected patient’s routine.
+- Build succeeds.
