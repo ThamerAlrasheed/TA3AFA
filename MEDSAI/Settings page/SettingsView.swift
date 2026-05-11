@@ -28,7 +28,7 @@ struct SettingsView: View {
 
                 Section("Care") {
                     SettingsNavRow(
-                        icon: "person.2.fill", iconColor: .green,
+                        icon: "person.2.fill", iconColor: .teal,
                         title: "Family Members",
                         subtitle: "Manage patients and care access"
                     ) {
@@ -132,7 +132,7 @@ struct SettingsView: View {
                     }
 
                     NavigationLink {
-                        FAQView().tint(.green)
+                        FAQView()
                     } label: {
                         HStack(spacing: 10) {
                             SettingsIconBadge(systemName: "questionmark.circle.fill", color: .blue)
@@ -162,7 +162,7 @@ struct SettingsView: View {
                         )
                     } label: {
                         HStack(spacing: 10) {
-                            SettingsIconBadge(systemName: "envelope.fill", color: .green)
+                            SettingsIconBadge(systemName: "envelope.fill", color: .teal)
                             Text("Contact Support").foregroundStyle(.primary)
                         }
                     }
@@ -180,7 +180,7 @@ struct SettingsView: View {
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Settings")
-            .tint(.green)
+            .tint(.blue)
             .toolbar {
                 if settings.role == .caregiver {
                     ToolbarItem(placement: .topBarLeading) {
@@ -209,14 +209,14 @@ struct SettingsView: View {
                 ZStack {
                     Circle()
                         .fill(settings.role == .caregiver
-                              ? Color.green.opacity(0.12)
+                              ? Color.teal.opacity(0.12)
                               : Color.blue.opacity(0.10))
                         .frame(width: 64, height: 64)
                     Image(systemName: settings.role == .caregiver
                           ? "person.2.fill"
                           : "person.crop.circle.fill")
                         .font(.system(size: 28))
-                        .foregroundStyle(settings.role == .caregiver ? .green : .blue)
+                        .foregroundStyle(settings.role == .caregiver ? Color.teal : Color.blue)
                 }
                 .padding(.top, 16)
 
@@ -229,7 +229,7 @@ struct SettingsView: View {
                     if settings.role == .caregiver {
                         if let name = settings.activePatientName {
                             Label("Managing \(name)", systemImage: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
+                                .foregroundStyle(.teal)
                         } else {
                             Label("No patient selected", systemImage: "person.crop.circle.badge.questionmark")
                                 .foregroundStyle(.secondary)
@@ -387,7 +387,7 @@ private struct ReminderSettingsView: View {
         }
         .navigationTitle("Reminders")
         .navigationBarTitleDisplayMode(.inline)
-        .tint(.green)
+        .tint(.blue)
     }
 }
 
@@ -410,7 +410,6 @@ private struct FAQView: View {
             }
         }
         .navigationTitle("FAQ")
-        .tint(.green)
     }
 }
 

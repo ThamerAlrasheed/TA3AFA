@@ -37,7 +37,7 @@ struct FamilySettingsView: View {
                             HStack(spacing: 12) {
                                 Image(systemName: "person.crop.circle.fill")
                                     .font(.title2)
-                                    .foregroundStyle(.green)
+                                    .foregroundStyle(.teal)
                                     .frame(width: 32)
 
                                 VStack(alignment: .leading, spacing: 4) {
@@ -73,7 +73,7 @@ struct FamilySettingsView: View {
                         Image(systemName: "person.badge.plus")
                         Text("Add Family Member")
                     }
-                    .foregroundStyle(.green)
+                    .foregroundStyle(.blue)
                 }
             } footer: {
                 Text("Adding a family member allows you to manage their medications and schedule.")
@@ -181,7 +181,7 @@ struct CareProfileMenu: View {
                         .lineLimit(1)
                 }
             }
-            .foregroundStyle(.green)
+            .foregroundStyle(.teal)
         }
         .task { await loadPatients() }
     }
@@ -480,7 +480,7 @@ struct AddFamilyMemberView: View {
                                 UIPasteboard.general.string = code
                             }
                             .buttonStyle(.bordered)
-                            .tint(.green)
+                            .tint(.blue)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 20)

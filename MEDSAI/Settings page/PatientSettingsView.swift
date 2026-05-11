@@ -12,7 +12,7 @@ struct PatientSettingsView: View {
                         Image(systemName: "person.crop.circle.fill")
                             .resizable()
                             .frame(width: 60, height: 60)
-                            .foregroundStyle(.green)
+                            .foregroundStyle(.blue)
                         
                         VStack(alignment: .leading, spacing: 4) {
                             Text("\(settings.firstName) \(settings.lastName)")
@@ -28,7 +28,7 @@ struct PatientSettingsView: View {
                 Section(header: Text("Connected Caregiver")) {
                     HStack {
                         Image(systemName: "person.2.fill")
-                            .foregroundStyle(.green)
+                            .foregroundStyle(.teal)
                         Text("Your Caregiver")
                         Spacer()
                         Text("Active")
