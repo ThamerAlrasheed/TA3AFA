@@ -1,65 +1,182 @@
 import SwiftUI
 import UserNotifications
 
+// MARK: - Settings Hub
+
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
 
-    // MARK: - Profile (split first / last)
     @AppStorage("profile.firstName") private var firstName: String = ""
     @AppStorage("profile.lastName")  private var lastName: String  = ""
     @AppStorage("profile.dob")       private var dobISO: String    = ""
-
-    // MARK: - Notifications toggles
-    @AppStorage("notify.enabled")      private var notificationsEnabled: Bool = true
-    @AppStorage("notify.doses")        private var notifyDoses: Bool = true
-    @AppStorage("notify.appts")        private var notifyAppointments: Bool = true
-    @AppStorage("notify.followUp15")   private var notifyFollowUp15: Bool = true
-
-    // MARK: - Appearance
-    enum FontSize: String, CaseIterable, Identifiable {
-        case small, medium, large
-        var id: String { rawValue }
-        var label: String { switch self { case .small: "Small"; case .medium: "Medium"; case .large: "Large" } }
-        var scale: CGFloat { switch self { case .small: 0.92; case .medium: 1.0; case .large: 1.12 } }
-    }
-    @AppStorage("appearance.fontSize") private var fontSizeRaw: String = FontSize.medium.rawValue
-    private var fontSize: FontSize {
-        get { FontSize(rawValue: fontSizeRaw) ?? .medium }
-        set { fontSizeRaw = newValue.rawValue }
-    }
     @AppStorage("appearance.language") private var languageCode: String =
         Locale.current.language.languageCode?.identifier ?? "en"
 
     private var supabase: SupabaseManager { .shared }
 
+    private var medicalProfilePatientId: String? {
+        if settings.role == .caregiver, let pid = settings.activePatientID {
+            return pid
+        }
+        return supabase.currentUserID?.uuidString.lowercased()
+    }
+
     var body: some View {
         NavigationStack {
             List {
-                if settings.role == .patient {
-                    Section {
-                        Button {
-                            // Already in patient mode, but we can re-verify current user ID
-                            // or provide an 'Act as Myself' button for symmetry
-                            Task { await settings.loadRoutineFromSupabase() }
-                        } label: {
-                            HStack {
-                                Image(systemName: "person.circle.fill")
-                                Text("Act as Myself (\(settings.firstName))")
-                                    .bold()
-                            }
-                        }
-                    } footer: {
-                        Text("You are managing your own healthcare schedule.")
+                profileHeaderSection
+
+                Section("Care") {
+                    SettingsNavRow(
+                        icon: "person.2.fill", iconColor: .green,
+                        title: "Family Members",
+                        subtitle: "Manage patients and care access"
+                    ) {
+                        FamilySettingsView().environmentObject(settings)
+                    }
+
+                    SettingsNavRow(
+                        icon: "cross.case.fill", iconColor: .red,
+                        title: "Medical Profile",
+                        subtitle: settings.activePatientName.map { "Managing \($0)'s profile" }
+                            ?? "Allergies and chronic conditions"
+                    ) {
+                        MedicalProfileView(
+                            patientId: medicalProfilePatientId,
+                            patientName: settings.activePatientName
+                                ?? (firstName.isEmpty ? "My" : firstName)
+                        )
+                    }
+
+                    SettingsNavRow(
+                        icon: "clock.fill", iconColor: .orange,
+                        title: "Daily Routine",
+                        subtitle: settings.activePatientName.map { "Managing \($0)'s routine" }
+                            ?? "Wake time, meals, and bedtime"
+                    ) {
+                        RoutineSettingsView().environmentObject(settings)
+                    }
+
+                    SettingsNavRow(
+                        icon: "bell.badge.fill", iconColor: .purple,
+                        title: "Reminders",
+                        subtitle: "Medication and appointment alerts"
+                    ) {
+                        ReminderSettingsView()
                     }
                 }
-                familyMembersSection
-                medicalProfileSection
-                profileSection
-                dailyRoutineSection
-                notificationsSection
-                appearanceSection
-                helpLegalSection
-                signOutSection
+
+                Section("Preferences") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 10) {
+                            SettingsIconBadge(systemName: "paintbrush.fill", color: .indigo)
+                            Text("Appearance").font(.body)
+                        }
+                        Picker("Appearance", selection: $settings.appearanceMode) {
+                            ForEach(AppSettings.AppearanceMode.allCases) { mode in
+                                Text(mode.label).tag(mode)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .padding(.leading, 40)
+                    }
+                    .padding(.vertical, 4)
+
+                    HStack(spacing: 10) {
+                        SettingsIconBadge(systemName: "globe", color: .blue)
+                        Picker("Language", selection: $languageCode) {
+                            Text("English").tag("en")
+                            Text("العربية").tag("ar")
+                        }
+                    }
+                }
+
+                Section("Account Profile") {
+                    HStack {
+                        Text("First name")
+                        Spacer()
+                        TextField("First", text: $firstName)
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.words)
+                    }
+                    HStack {
+                        Text("Last name")
+                        Spacer()
+                        TextField("Last", text: $lastName)
+                            .multilineTextAlignment(.trailing)
+                            .textInputAutocapitalization(.words)
+                    }
+                    HStack {
+                        Text("Email")
+                        Spacer()
+                        Text(currentEmail()).foregroundStyle(.secondary)
+                    }
+                    DatePicker(
+                        "Date of birth",
+                        selection: Binding(
+                            get: { dobFromISO(dobISO) ?? Date(timeIntervalSince1970: 0) },
+                            set: { dobISO = isoString(from: $0) }
+                        ),
+                        displayedComponents: .date
+                    )
+                }
+
+                Section("Help & Legal") {
+                    Button {
+                        settings.onboardingCompleted = false
+                    } label: {
+                        HStack(spacing: 10) {
+                            SettingsIconBadge(systemName: "sparkles", color: .yellow)
+                            Text("Show tutorial again").foregroundStyle(.primary)
+                        }
+                    }
+
+                    NavigationLink {
+                        FAQView().tint(.green)
+                    } label: {
+                        HStack(spacing: 10) {
+                            SettingsIconBadge(systemName: "questionmark.circle.fill", color: .blue)
+                            Text("FAQ")
+                        }
+                    }
+
+                    Link(destination: URL(string: "https://example.com/privacy")!) {
+                        HStack(spacing: 10) {
+                            SettingsIconBadge(systemName: "hand.raised.fill", color: Color(.systemGray))
+                            Text("Privacy Policy").foregroundStyle(.primary)
+                        }
+                    }
+
+                    Link(destination: URL(string: "https://example.com/terms")!) {
+                        HStack(spacing: 10) {
+                            SettingsIconBadge(systemName: "doc.text.fill", color: Color(.systemGray))
+                            Text("Terms of Service").foregroundStyle(.primary)
+                        }
+                    }
+
+                    Button {
+                        openMail(
+                            to: "support@yourapp.example",
+                            subject: "ISTSEH Support",
+                            body: defaultSupportBody()
+                        )
+                    } label: {
+                        HStack(spacing: 10) {
+                            SettingsIconBadge(systemName: "envelope.fill", color: .green)
+                            Text("Contact Support").foregroundStyle(.primary)
+                        }
+                    }
+                }
+
+                Section {
+                    Button(role: .destructive) { signOut() } label: {
+                        HStack {
+                            Spacer()
+                            Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+                            Spacer()
+                        }
+                    }
+                }
             }
             .listStyle(.insetGrouped)
             .navigationTitle("Settings")
@@ -84,227 +201,61 @@ struct SettingsView: View {
         .safeAreaPadding(.bottom)
     }
 
-    // MARK: - Sections
+    // MARK: - Profile Header Card
 
-    private var profileSection: some View {
-        Section(header: Text("Profile")) {
-            HStack {
-                Text("First name")
-                Spacer()
-                TextField("First", text: $firstName)
-                    .multilineTextAlignment(.trailing)
-                    .textInputAutocapitalization(.words)
-            }
+    private var profileHeaderSection: some View {
+        Section {
+            VStack(spacing: 8) {
+                ZStack {
+                    Circle()
+                        .fill(settings.role == .caregiver
+                              ? Color.green.opacity(0.12)
+                              : Color.blue.opacity(0.10))
+                        .frame(width: 64, height: 64)
+                    Image(systemName: settings.role == .caregiver
+                          ? "person.2.fill"
+                          : "person.crop.circle.fill")
+                        .font(.system(size: 28))
+                        .foregroundStyle(settings.role == .caregiver ? .green : .blue)
+                }
+                .padding(.top, 16)
 
-            HStack {
-                Text("Last name")
-                Spacer()
-                TextField("Last", text: $lastName)
-                    .multilineTextAlignment(.trailing)
-                    .textInputAutocapitalization(.words)
-            }
+                if !firstName.isEmpty || !lastName.isEmpty {
+                    Text("\(firstName) \(lastName)".trimmingCharacters(in: .whitespaces))
+                        .font(.title3.weight(.semibold))
+                }
 
-            HStack {
-                Text("Email")
-                Spacer()
-                Text(currentEmail()).foregroundStyle(.secondary)
-            }
-
-            DatePicker("Date of birth",
-                       selection: Binding(
-                        get: { dobFromISO(dobISO) ?? Date(timeIntervalSince1970: 0) },
-                        set: { dobISO = isoString(from: $0) }),
-                       displayedComponents: .date)
-        }
-    }
-
-    private var familyMembersSection: some View {
-        Section(header: Text("Family Members")) {
-            NavigationLink {
-                FamilySettingsView()
-                    .environmentObject(settings)
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "person.2.fill")
-                        .foregroundStyle(.green)
-                        .frame(width: 32)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Manage family")
-                        Text("Open each member to adjust permissions and care settings")
-                            .font(.caption)
+                Group {
+                    if settings.role == .caregiver {
+                        if let name = settings.activePatientName {
+                            Label("Managing \(name)", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                        } else {
+                            Label("No patient selected", systemImage: "person.crop.circle.badge.questionmark")
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if settings.role == .patient {
+                        Label("Patient profile", systemImage: "staroflife.fill")
+                            .foregroundStyle(.blue)
+                    } else {
+                        Label("Personal care", systemImage: "heart.fill")
                             .foregroundStyle(.secondary)
                     }
                 }
+                .font(.subheadline)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 6)
+                .background(Color(.secondarySystemGroupedBackground))
+                .clipShape(Capsule())
+                .padding(.bottom, 16)
             }
+            .frame(maxWidth: .infinity)
         }
+        .listRowInsets(EdgeInsets())
+        .listRowBackground(Color(.systemGroupedBackground))
     }
 
-    private var medicalProfileSection: some View {
-        Section(header: Text("Medical Profile")) {
-            NavigationLink {
-                MedicalProfileView(
-                    patientId: supabase.currentUserID?.uuidString.lowercased(),
-                    patientName: settings.activePatientName ?? (settings.firstName.isEmpty ? "My" : settings.firstName)
-                )
-            } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "cross.case.fill")
-                        .foregroundStyle(.red)
-                        .frame(width: 32)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Allergies & Conditions")
-                        if let patientName = settings.activePatientName {
-                            Text("Managing \(patientName)'s profile")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            Text("Manage known allergies and chronic conditions")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private var dailyRoutineSection: some View {
-        let patientName = settings.activePatientName
-        return Section(
-            header: Group {
-                if let name = patientName {
-                    Text("Daily Routine — \(name)")
-                } else {
-                    Text("Daily routine")
-                }
-            },
-            footer: Text("These times help schedule doses and appointment reminders.")
-        ) {
-            TimeRow(title: "Wake time", comps: $settings.wakeup)
-            TimeRow(title: "Bedtime",   comps: $settings.bedtime)
-            TimeRow(title: "Breakfast", comps: $settings.breakfast)
-            TimeRow(title: "Lunch",     comps: $settings.lunch)
-            TimeRow(title: "Dinner",    comps: $settings.dinner)
-        }
-    }
-
-    private var notificationsSection: some View {
-        Section(
-            header: Text("Notifications"),
-            footer: Text("If enabled, you'll be reminded at dose time. A second reminder can be sent 15 minutes later if you haven't marked the dose as taken.")
-        ) {
-            Toggle(isOn: $notificationsEnabled) {
-                Text("Enable notifications")
-            }
-            .onChange(of: notificationsEnabled) { _, newVal in
-                Task {
-                    if newVal {
-                        _ = await NotificationsManager.shared.requestAuthorization()
-                    } else {
-                        notifyDoses = false
-                        notifyAppointments = false
-                        notifyFollowUp15 = false
-                        UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
-                    }
-                }
-            }
-
-            Toggle("Medication reminders", isOn: $notifyDoses)
-                .disabled(!notificationsEnabled)
-
-            Toggle("Appointment reminders", isOn: $notifyAppointments)
-                .disabled(!notificationsEnabled)
-
-            Toggle("Follow-up after 15 minutes", isOn: $notifyFollowUp15)
-                .disabled(!notificationsEnabled || !notifyDoses)
-        }
-    }
-
-    private var appearanceSection: some View {
-        Section(header: Text("Appearance")) {
-            Picker("Theme", selection: $settings.appearanceMode) {
-                ForEach(AppSettings.AppearanceMode.allCases) { mode in
-                    Text(mode.label).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            Picker("Font size", selection: Binding(
-                get: { fontSize },
-                set: { newValue in fontSizeRaw = newValue.rawValue }
-            )) {
-                ForEach(FontSize.allCases) { fs in
-                    Text(fs.label).tag(fs)
-                }
-            }
-            .pickerStyle(.segmented)
-
-            Picker("Language", selection: $languageCode) {
-                Text("English").tag("en")
-                Text("العربية").tag("ar")
-            }
-        }
-    }
-
-    private var helpLegalSection: some View {
-        Section(header: Text("Help & Legal")) {
-            Button {
-                settings.onboardingCompleted = false
-            } label: {
-                HStack {
-                    Image(systemName: "sparkles").foregroundStyle(.green)
-                    Text("Show tutorial again").foregroundStyle(.green)
-                }
-            }
-
-            NavigationLink {
-                FAQView()
-                    .tint(.green)
-            } label: {
-                HStack {
-                    Image(systemName: "questionmark.circle").foregroundStyle(.green)
-                    Text("FAQ").foregroundStyle(.green)
-                }
-            }
-
-            Link(destination: URL(string: "https://example.com/privacy")!) {
-                HStack {
-                    Image(systemName: "hand.raised").foregroundStyle(.green)
-                    Text("Privacy Policy").foregroundStyle(.primary)
-                }
-            }
-            Link(destination: URL(string: "https://example.com/terms")!) {
-                HStack {
-                    Image(systemName: "doc.plaintext").foregroundStyle(.green)
-                    Text("Terms of Service").foregroundStyle(.primary)
-                }
-            }
-
-            Button {
-                openMail(to: "support@yourapp.example", subject: "MEDSAI Support", body: defaultSupportBody())
-            } label: {
-                HStack {
-                    Image(systemName: "envelope").foregroundStyle(.green)
-                    Text("Contact Support").foregroundStyle(.primary)
-                }
-            }
-        }
-    }
-
-    private var signOutSection: some View {
-        Section {
-            Button(role: .destructive) {
-                signOut()
-            } label: {
-                HStack {
-                    Image(systemName: "rectangle.portrait.and.arrow.right")
-                    Text("Sign out")
-                }
-            }
-        }
-    }
-
-    // MARK: - Name hydration & persistence (Supabase)
+    // MARK: - Supabase helpers
 
     private func hydrateNamesFromSupabase() async {
         guard firstName.isEmpty || lastName.isEmpty,
@@ -322,28 +273,20 @@ struct SettingsView: View {
                 if firstName.isEmpty, let fn = row.first_name, !fn.isEmpty { firstName = fn }
                 if lastName.isEmpty,  let ln = row.last_name,  !ln.isEmpty { lastName  = ln }
             }
-        } catch {
-            // Ignore silently; app still works
-        }
+        } catch { }
     }
 
     private func persistNames() async {
         guard let uid = supabase.currentUserID else { return }
         let trimmedFirst = firstName.trimmingCharacters(in: .whitespaces)
         let trimmedLast  = lastName.trimmingCharacters(in: .whitespaces)
-
         do {
             try await supabase.client
                 .from("users")
-                .update([
-                    "first_name": trimmedFirst,
-                    "last_name": trimmedLast
-                ])
+                .update(["first_name": trimmedFirst, "last_name": trimmedLast])
                 .eq("id", value: uid.uuidString)
                 .execute()
-        } catch {
-            // Ignore write errors for now
-        }
+        } catch { }
     }
 
     // MARK: - Helpers
@@ -366,7 +309,7 @@ struct SettingsView: View {
     }
 
     private func ensureNotificationAuthIfEnabled() async {
-        guard notificationsEnabled else { return }
+        guard UserDefaults.standard.bool(forKey: "notify.enabled") else { return }
         _ = await NotificationsManager.shared.requestAuthorization()
     }
 
@@ -396,7 +339,7 @@ struct SettingsView: View {
         return """
         Hello Support,
 
-        I need help with the MEDSAI app.
+        I need help with the ISTSEH app.
 
         Email: \(email)
         App Version: 1.0
@@ -408,7 +351,53 @@ struct SettingsView: View {
     }
 }
 
-// MARK: - FAQ (tinted green)
+// MARK: - Reminder Settings Screen
+
+private struct ReminderSettingsView: View {
+    @AppStorage("notify.enabled")    private var notificationsEnabled: Bool = true
+    @AppStorage("notify.doses")      private var notifyDoses: Bool = true
+    @AppStorage("notify.appts")      private var notifyAppointments: Bool = true
+    @AppStorage("notify.followUp15") private var notifyFollowUp15: Bool = true
+
+    var body: some View {
+        Form {
+            Section(
+                footer: Text("Reminders are scheduled using this patient's medication plan and daily routine.")
+            ) {
+                Toggle(isOn: $notificationsEnabled) {
+                    Label("Enable reminders", systemImage: "bell.fill")
+                }
+                .onChange(of: notificationsEnabled) { _, newVal in
+                    Task {
+                        if newVal {
+                            _ = await NotificationsManager.shared.requestAuthorization()
+                        } else {
+                            notifyDoses = false
+                            notifyAppointments = false
+                            notifyFollowUp15 = false
+                            UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
+                        }
+                    }
+                }
+
+                Toggle("Medication reminders", isOn: $notifyDoses)
+                    .disabled(!notificationsEnabled)
+
+                Toggle("Appointment reminders", isOn: $notifyAppointments)
+                    .disabled(!notificationsEnabled)
+
+                Toggle("Follow-up after 15 minutes", isOn: $notifyFollowUp15)
+                    .disabled(!notificationsEnabled || !notifyDoses)
+            }
+        }
+        .navigationTitle("Reminders")
+        .navigationBarTitleDisplayMode(.inline)
+        .tint(.green)
+    }
+}
+
+// MARK: - FAQ Screen
+
 private struct FAQView: View {
     var body: some View {
         List {
@@ -427,5 +416,44 @@ private struct FAQView: View {
         }
         .navigationTitle("FAQ")
         .tint(.green)
+    }
+}
+
+// MARK: - Shared Settings Components
+
+struct SettingsNavRow<D: View>: View {
+    let icon: String
+    let iconColor: Color
+    let title: String
+    let subtitle: String
+    @ViewBuilder var destination: () -> D
+
+    var body: some View {
+        NavigationLink(destination: destination()) {
+            HStack(spacing: 14) {
+                SettingsIconBadge(systemName: icon, color: iconColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(.body)
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 3)
+        }
+    }
+}
+
+struct SettingsIconBadge: View {
+    let systemName: String
+    let color: Color
+
+    var body: some View {
+        Image(systemName: systemName)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 30, height: 30)
+            .background(color.gradient)
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
     }
 }

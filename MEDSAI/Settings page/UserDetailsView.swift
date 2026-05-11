@@ -1,70 +1,70 @@
 import SwiftUI
 
-/// Screen to view & edit the user's routine:
-/// - Meal schedule: Breakfast / Lunch / Dinner
-/// - Sleep schedule: Bedtime / Wake up
-///
-/// Values are bound directly to AppSettings.DateComponents and save immediately.
-struct UserDetailsView: View {
+// MARK: - Routine Settings Screen
+
+struct RoutineSettingsView: View {
     @EnvironmentObject var settings: AppSettings
 
     var body: some View {
         Form {
-            Section("Meal Schedule") {
-                SettingTimeRow(title: "Breakfast", comps: $settings.breakfast, defaultHour: 8,  defaultMinute: 0)
-                SettingTimeRow(title: "Lunch",     comps: $settings.lunch,     defaultHour: 13, defaultMinute: 0)
-                SettingTimeRow(title: "Dinner",    comps: $settings.dinner,    defaultHour: 19, defaultMinute: 0)
+            if let patientName = settings.activePatientName {
+                Section {
+                    Label("Managing \(patientName)'s routine", systemImage: "person.2.fill")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .listRowBackground(Color.clear)
             }
 
-            Section("Sleep Schedule") {
-                SettingTimeRow(title: "Bedtime",   comps: $settings.bedtime,   defaultHour: 23, defaultMinute: 0)
-                SettingTimeRow(title: "Wake up",   comps: $settings.wakeup,    defaultHour: 7,  defaultMinute: 0)
+            Section("Sleep") {
+                RoutineTimeRow(title: "Wake time", comps: $settings.wakeup,   defaultHour: 7)
+                RoutineTimeRow(title: "Bedtime",   comps: $settings.bedtime,  defaultHour: 23)
             }
 
-            Section(footer:
-                Text("Changes are saved automatically and used for your daily medication schedule.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+            Section("Meals") {
+                RoutineTimeRow(title: "Breakfast", comps: $settings.breakfast, defaultHour: 8)
+                RoutineTimeRow(title: "Lunch",     comps: $settings.lunch,     defaultHour: 13)
+                RoutineTimeRow(title: "Dinner",    comps: $settings.dinner,    defaultHour: 19)
+            }
+
+            Section(
+                footer: Text("Changes are saved automatically. Medication reminders are refreshed whenever these times change.")
             ) {
                 EmptyView()
             }
         }
-        .navigationTitle("User Details")
+        .navigationTitle("Daily Routine")
+        .navigationBarTitleDisplayMode(.inline)
+        .tint(.orange)
+        .onAppear {
+            Task { await settings.loadRoutineFromSupabase() }
+        }
     }
 }
 
-// MARK: - Reusable row binding DateComponents <-> Date
-/// Named uniquely to avoid clashing with other `TimeRow/RoutineRow` types in your project.
-private struct SettingTimeRow: View {
+// MARK: - Routine Time Row
+
+private struct RoutineTimeRow: View {
     let title: String
     @Binding var comps: DateComponents
     let defaultHour: Int
-    let defaultMinute: Int
 
     var body: some View {
-        HStack {
-            Text(title)
-                .frame(width: 120, alignment: .leading)
-            DatePicker(
-                "",
-                selection: Binding<Date>(
-                    get: { Calendar.current.date(from: comps) ?? defaultDate() },
-                    set: { newDate in
-                        let parts = Calendar.current.dateComponents([.hour, .minute], from: newDate)
-                        comps.hour = parts.hour
-                        comps.minute = parts.minute
-                    }
-                ),
-                displayedComponents: .hourAndMinute
-            )
-            .labelsHidden()
-        }
-        .font(.title3)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(title)
-    }
-
-    private func defaultDate() -> Date {
-        Calendar.current.date(from: DateComponents(hour: defaultHour, minute: defaultMinute)) ?? Date()
+        DatePicker(
+            title,
+            selection: Binding<Date>(
+                get: {
+                    Calendar.current.date(from: comps)
+                        ?? Calendar.current.date(from: DateComponents(hour: defaultHour, minute: 0))
+                        ?? Date()
+                },
+                set: { newDate in
+                    let parts = Calendar.current.dateComponents([.hour, .minute], from: newDate)
+                    comps.hour   = parts.hour
+                    comps.minute = parts.minute
+                }
+            ),
+            displayedComponents: .hourAndMinute
+        )
     }
 }
