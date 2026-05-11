@@ -58,19 +58,19 @@ enum AllergyCatalog {
             drugClass: "nsaid"
         ),
         AllergyCatalogItem(
-            id: "nsaid",
-            displayName: "NSAIDs (class)",
-            normalizedName: "nsaid",
+            id: "nsaids",
+            displayName: "NSAIDs",
+            normalizedName: "nsaids",
             category: "Pain Relievers",
-            aliases: ["NSAID", "nonsteroidal anti-inflammatory", "anti-inflammatory painkillers"],
+            aliases: ["NSAID", "nonsteroidal anti-inflammatory", "anti-inflammatory", "ibuprofen class"],
             drugClass: "nsaid"
         ),
         AllergyCatalogItem(
             id: "acetaminophen",
-            displayName: "Paracetamol / Acetaminophen",
-            normalizedName: "acetaminophen",
+            displayName: "Paracetamol",
+            normalizedName: "paracetamol",
             category: "Pain Relievers",
-            aliases: ["Panadol", "Tylenol", "paracetamol"],
+            aliases: ["Acetaminophen", "Panadol", "Tylenol", "Calpol"],
             drugClass: nil
         ),
 
@@ -116,11 +116,11 @@ enum AllergyCatalog {
             drugClass: "macrolide"
         ),
         AllergyCatalogItem(
-            id: "fluoroquinolone",
-            displayName: "Quinolones / Fluoroquinolones",
-            normalizedName: "fluoroquinolone",
+            id: "fluoroquinolones",
+            displayName: "Fluoroquinolones",
+            normalizedName: "fluoroquinolones",
             category: "Antibiotics",
-            aliases: ["ciprofloxacin", "levofloxacin", "moxifloxacin"],
+            aliases: ["Quinolones", "ciprofloxacin", "levofloxacin", "moxifloxacin"],
             drugClass: "fluoroquinolone"
         ),
         AllergyCatalogItem(

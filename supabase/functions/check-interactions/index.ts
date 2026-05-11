@@ -7,8 +7,8 @@ import {
   SafetyWarning, 
   WarningType, 
   Severity,
-  ALLERGY_CLASS_MAP,
   inferKnownIngredients,
+  resolveAllergyClassMembers,
   normalizeDrugTerm
 } from "../_shared/drug-utils.ts";
 import { logAudit } from "../_shared/audit-helpers.ts";
@@ -223,7 +223,9 @@ Deno.serve(async (req) => {
             );
             
             // Check class map match (e.g. penicillins, NSAIDs).
-            const classMembers = [...allergyTerms].flatMap(term => ALLERGY_CLASS_MAP[term] ?? []);
+            // resolveAllergyClassMembers does exact key lookup first, then
+            // substring lookup so "nsaids class" still finds the "nsaids" key.
+            const classMembers = [...allergyTerms].flatMap(term => resolveAllergyClassMembers(term));
             const classMatch = classMembers.some(member => 
               medTerms.some(term => term.includes(member) || member.includes(term))
             );

@@ -131,38 +131,189 @@ export function validateParsedSchedule(data: any): data is ParsedSchedule {
 
 // Simple curated map for allergy classes
 // Map keys are normalized lower-case search terms (e.g., from patient_allergies)
+// All keys are the output of normalizeDrugTerm() — lowercase, spaces only, no punctuation.
+const _NSAID_MEMBERS = ["ibuprofen", "naproxen", "aspirin", "celecoxib", "diclofenac", "advil", "motrin", "brufen", "nurofen", "aleve", "voltaren", "naprosyn"];
+const _PENICILLIN_MEMBERS = ["amoxicillin", "ampicillin", "penicillin", "dicloxacillin", "piperacillin", "augmentin", "amoxil", "clavulanate"];
+const _CEPHALOSPORIN_MEMBERS = ["cephalexin", "cefuroxime", "ceftriaxone", "cefazolin", "cefixime", "cefprozil", "cefdinir"];
+const _MACROLIDE_MEMBERS = ["azithromycin", "clarithromycin", "erythromycin"];
+const _TETRACYCLINE_MEMBERS = ["doxycycline", "minocycline", "tetracycline"];
+const _FLUOROQUINOLONE_MEMBERS = ["ciprofloxacin", "levofloxacin", "moxifloxacin", "ofloxacin", "norfloxacin"];
+const _SULFONAMIDE_MEMBERS = ["sulfamethoxazole", "sulfasalazine", "bactrim", "septra", "trimethoprim", "co trimoxazole"];
+const _STATIN_MEMBERS = ["atorvastatin", "simvastatin", "rosuvastatin", "pravastatin", "lovastatin", "fluvastatin"];
+const _OPIOID_MEMBERS = ["morphine", "codeine", "tramadol", "oxycodone", "hydrocodone", "fentanyl", "hydromorphone"];
+const _ACE_INHIBITOR_MEMBERS = ["lisinopril", "enalapril", "ramipril", "captopril", "benazepril", "perindopril"];
+
 export const ALLERGY_CLASS_MAP: Record<string, string[]> = {
-  "penicillin": ["amoxicillin", "ampicillin", "penicillin", "dicloxacillin", "piperacillin", "augmentin", "clavulanate"],
-  "penicillins": ["amoxicillin", "ampicillin", "penicillin", "dicloxacillin", "piperacillin", "augmentin", "clavulanate"],
-  "ibuprofen": ["ibuprofen", "advil", "motrin", "brufen", "nurofen"],
-  "advil": ["ibuprofen", "advil", "motrin", "brufen", "nurofen"],
-  "motrin": ["ibuprofen", "advil", "motrin", "brufen", "nurofen"],
-  "brufen": ["ibuprofen", "advil", "motrin", "brufen", "nurofen"],
-  "nurofen": ["ibuprofen", "advil", "motrin", "brufen", "nurofen"],
-  "nsaid": ["ibuprofen", "naproxen", "aspirin", "celecoxib", "diclofenac", "advil", "motrin", "brufen", "nurofen", "aleve"],
-  "nsaids": ["ibuprofen", "naproxen", "aspirin", "celecoxib", "diclofenac", "advil", "motrin", "brufen", "nurofen", "aleve"],
-  "nonsteroidal anti inflammatory": ["ibuprofen", "naproxen", "aspirin", "celecoxib", "diclofenac", "advil", "motrin", "brufen", "nurofen", "aleve"],
-  "nonsteroidal anti inflammatory drug": ["ibuprofen", "naproxen", "aspirin", "celecoxib", "diclofenac", "advil", "motrin", "brufen", "nurofen", "aleve"],
-  "non steroidal anti inflammatory": ["ibuprofen", "naproxen", "aspirin", "celecoxib", "diclofenac", "advil", "motrin", "brufen", "nurofen", "aleve"],
-  "sulfa": ["sulfamethoxazole", "sulfasalazine", "bactrim", "septra"],
+  // NSAIDs — all brand/generic aliases and class labels
+  "ibuprofen":                          _NSAID_MEMBERS,
+  "advil":                              _NSAID_MEMBERS,
+  "motrin":                             _NSAID_MEMBERS,
+  "brufen":                             _NSAID_MEMBERS,
+  "nurofen":                            _NSAID_MEMBERS,
+  "naproxen":                           _NSAID_MEMBERS,
+  "aleve":                              _NSAID_MEMBERS,
+  "aspirin":                            _NSAID_MEMBERS,
+  "diclofenac":                         _NSAID_MEMBERS,
+  "voltaren":                           _NSAID_MEMBERS,
+  "celecoxib":                          _NSAID_MEMBERS,
+  "nsaid":                              _NSAID_MEMBERS,
+  "nsaids":                             _NSAID_MEMBERS,
+  "nonsteroidal anti inflammatory":     _NSAID_MEMBERS,
+  "nonsteroidal anti inflammatory drug":_NSAID_MEMBERS,
+  "non steroidal anti inflammatory":    _NSAID_MEMBERS,
+  "anti inflammatory":                  _NSAID_MEMBERS,
+
+  // Penicillins
+  "penicillin":                         _PENICILLIN_MEMBERS,
+  "penicillins":                        _PENICILLIN_MEMBERS,
+  "amoxicillin":                        _PENICILLIN_MEMBERS,
+  "augmentin":                          _PENICILLIN_MEMBERS,
+  "amoxil":                             _PENICILLIN_MEMBERS,
+  "ampicillin":                         _PENICILLIN_MEMBERS,
+
+  // Cephalosporins
+  "cephalosporin":                      _CEPHALOSPORIN_MEMBERS,
+  "cephalosporins":                     _CEPHALOSPORIN_MEMBERS,
+  "cephalexin":                         _CEPHALOSPORIN_MEMBERS,
+  "cefuroxime":                         _CEPHALOSPORIN_MEMBERS,
+  "ceftriaxone":                        _CEPHALOSPORIN_MEMBERS,
+
+  // Macrolides
+  "macrolide":                          _MACROLIDE_MEMBERS,
+  "macrolides":                         _MACROLIDE_MEMBERS,
+  "azithromycin":                       _MACROLIDE_MEMBERS,
+  "clarithromycin":                     _MACROLIDE_MEMBERS,
+  "erythromycin":                       _MACROLIDE_MEMBERS,
+
+  // Tetracyclines
+  "tetracycline":                       _TETRACYCLINE_MEMBERS,
+  "tetracyclines":                      _TETRACYCLINE_MEMBERS,
+  "doxycycline":                        _TETRACYCLINE_MEMBERS,
+  "minocycline":                        _TETRACYCLINE_MEMBERS,
+
+  // Fluoroquinolones / Quinolones
+  "fluoroquinolone":                    _FLUOROQUINOLONE_MEMBERS,
+  "fluoroquinolones":                   _FLUOROQUINOLONE_MEMBERS,
+  "quinolone":                          _FLUOROQUINOLONE_MEMBERS,
+  "quinolones":                         _FLUOROQUINOLONE_MEMBERS,
+  "ciprofloxacin":                      _FLUOROQUINOLONE_MEMBERS,
+  "levofloxacin":                       _FLUOROQUINOLONE_MEMBERS,
+  "moxifloxacin":                       _FLUOROQUINOLONE_MEMBERS,
+
+  // Sulfonamides
+  "sulfa":                              _SULFONAMIDE_MEMBERS,
+  "sulfas":                             _SULFONAMIDE_MEMBERS,
+  "sulfonamide":                        _SULFONAMIDE_MEMBERS,
+  "sulfonamides":                       _SULFONAMIDE_MEMBERS,
+  "sulfonamide antibiotic":             _SULFONAMIDE_MEMBERS,
+  "sulfamethoxazole":                   _SULFONAMIDE_MEMBERS,
+  "bactrim":                            _SULFONAMIDE_MEMBERS,
+  "septra":                             _SULFONAMIDE_MEMBERS,
+
+  // Statins
+  "statin":                             _STATIN_MEMBERS,
+  "statins":                            _STATIN_MEMBERS,
+  "atorvastatin":                       _STATIN_MEMBERS,
+  "simvastatin":                        _STATIN_MEMBERS,
+  "rosuvastatin":                       _STATIN_MEMBERS,
+
+  // Opioids
+  "opioid":                             _OPIOID_MEMBERS,
+  "opioids":                            _OPIOID_MEMBERS,
+  "morphine":                           _OPIOID_MEMBERS,
+  "codeine":                            _OPIOID_MEMBERS,
+  "tramadol":                           _OPIOID_MEMBERS,
+  "oxycodone":                          _OPIOID_MEMBERS,
+
+  // ACE inhibitors
+  "ace inhibitor":                      _ACE_INHIBITOR_MEMBERS,
+  "ace inhibitors":                     _ACE_INHIBITOR_MEMBERS,
+  "lisinopril":                         _ACE_INHIBITOR_MEMBERS,
+  "enalapril":                          _ACE_INHIBITOR_MEMBERS,
+  "ramipril":                           _ACE_INHIBITOR_MEMBERS,
 };
 
 export const INGREDIENT_ALIAS_MAP: Record<string, string> = {
-  ibuprofen: "ibuprofen",
-  advil: "ibuprofen",
-  motrin: "ibuprofen",
-  brufen: "ibuprofen",
-  nurofen: "ibuprofen",
-  acetaminophen: "acetaminophen",
-  paracetamol: "acetaminophen",
-  tylenol: "acetaminophen",
-  panadol: "acetaminophen",
-  amoxil: "amoxicillin",
-  amoxicillin: "amoxicillin",
-  augmentin: "amoxicillin",
-  aleve: "naproxen",
-  naproxen: "naproxen",
-  aspirin: "aspirin",
+  // NSAIDs — all map to canonical ingredient name
+  ibuprofen:      "ibuprofen",
+  advil:          "ibuprofen",
+  motrin:         "ibuprofen",
+  brufen:         "ibuprofen",
+  nurofen:        "ibuprofen",
+  naproxen:       "naproxen",
+  aleve:          "naproxen",
+  naprosyn:       "naproxen",
+  diclofenac:     "diclofenac",
+  voltaren:       "diclofenac",
+  cataflam:       "diclofenac",
+  celecoxib:      "celecoxib",
+  celebrex:       "celecoxib",
+  aspirin:        "aspirin",
+  asa:            "aspirin",
+  // Acetaminophen / Paracetamol
+  acetaminophen:  "acetaminophen",
+  paracetamol:    "acetaminophen",
+  tylenol:        "acetaminophen",
+  panadol:        "acetaminophen",
+  calpol:         "acetaminophen",
+  // Penicillins
+  amoxicillin:    "amoxicillin",
+  amoxil:         "amoxicillin",
+  augmentin:      "amoxicillin",
+  ampicillin:     "ampicillin",
+  penicillin:     "penicillin",
+  piperacillin:   "piperacillin",
+  // Cephalosporins
+  cephalexin:     "cephalexin",
+  cefuroxime:     "cefuroxime",
+  ceftriaxone:    "ceftriaxone",
+  cefazolin:      "cefazolin",
+  cefixime:       "cefixime",
+  // Macrolides
+  azithromycin:   "azithromycin",
+  zithromax:      "azithromycin",
+  clarithromycin: "clarithromycin",
+  erythromycin:   "erythromycin",
+  // Tetracyclines
+  doxycycline:    "doxycycline",
+  minocycline:    "minocycline",
+  tetracycline:   "tetracycline",
+  // Fluoroquinolones
+  ciprofloxacin:  "ciprofloxacin",
+  cipro:          "ciprofloxacin",
+  levofloxacin:   "levofloxacin",
+  levaquin:       "levofloxacin",
+  moxifloxacin:   "moxifloxacin",
+  ofloxacin:      "ofloxacin",
+  // Sulfonamides
+  sulfamethoxazole: "sulfamethoxazole",
+  trimethoprim:     "trimethoprim",
+  bactrim:          "sulfamethoxazole",
+  septra:           "sulfamethoxazole",
+  // Statins
+  atorvastatin:   "atorvastatin",
+  lipitor:        "atorvastatin",
+  simvastatin:    "simvastatin",
+  zocor:          "simvastatin",
+  rosuvastatin:   "rosuvastatin",
+  crestor:        "rosuvastatin",
+  // Opioids
+  morphine:       "morphine",
+  codeine:        "codeine",
+  tramadol:       "tramadol",
+  oxycodone:      "oxycodone",
+  hydrocodone:    "hydrocodone",
+  fentanyl:       "fentanyl",
+  // ACE inhibitors
+  lisinopril:     "lisinopril",
+  zestril:        "lisinopril",
+  enalapril:      "enalapril",
+  vasotec:        "enalapril",
+  ramipril:       "ramipril",
+  altace:         "ramipril",
+  // Metformin
+  metformin:      "metformin",
+  glucophage:     "metformin",
 };
 
 export function normalizeDrugTerm(value: string | null | undefined) {
@@ -196,6 +347,24 @@ function isDrugClassLabel(term: string) {
   return term.includes(" epc") ||
     term.includes("nonsteroidal anti inflammatory drug") ||
     term.includes("non steroidal anti inflammatory drug");
+}
+
+/**
+ * Resolve the class members for an allergy term.
+ * 1. Exact key lookup in ALLERGY_CLASS_MAP.
+ * 2. Substring lookup: find a class key (≥4 chars) that is contained
+ *    within the term — handles cases like "nsaids class" matching "nsaids",
+ *    or "sulfa antibiotics" matching "sulfa".
+ */
+export function resolveAllergyClassMembers(term: string): string[] {
+  const exact = ALLERGY_CLASS_MAP[term];
+  if (exact) return exact;
+  for (const [key, members] of Object.entries(ALLERGY_CLASS_MAP)) {
+    if (key.length >= 4 && (term.includes(key) || key.includes(term))) {
+      return members;
+    }
+  }
+  return [];
 }
 
 export const drugSummarySchema = {
