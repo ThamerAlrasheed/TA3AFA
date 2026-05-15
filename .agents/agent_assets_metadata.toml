@@ -6,3 +6,9 @@ id = "FcoHVInOEe4i3FCb3FLSJ"
 uri = "file://MEDSAI/Resources/medsai_loading.gif"
 type = "image"
 title = "medsai_loading.gif"
+
+[[outputs]]
+id = "BXl8dqzZ6KiS9aTA9nRcT"
+uri = "file://MEDSAI/Resources/medsai_loading_zoomed.gif"
+type = "image"
+title = "medsai_loading_zoomed.gif"
