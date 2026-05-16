@@ -12,3 +12,9 @@ id = "BXl8dqzZ6KiS9aTA9nRcT"
 uri = "file://MEDSAI/Resources/medsai_loading_zoomed.gif"
 type = "image"
 title = "medsai_loading_zoomed.gif"
+
+[[outputs]]
+id = "gaNJRQqkKHFdKoCdfzMbZ"
+uri = "file://MEDSAI/Resources/medsai_transparent.gif"
+type = "image"
+title = "medsai_transparent.gif"
