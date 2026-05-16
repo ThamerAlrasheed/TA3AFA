@@ -18,3 +18,9 @@ id = "gaNJRQqkKHFdKoCdfzMbZ"
 uri = "file://MEDSAI/Resources/medsai_transparent.gif"
 type = "image"
 title = "medsai_transparent.gif"
+
+[[outputs]]
+id = "JtjHotCdgX2mEGD04RuWB"
+uri = "file://MEDSAI/Resources/medsai_transparent2.gif"
+type = "image"
+title = "medsai_transparent2.gif"
