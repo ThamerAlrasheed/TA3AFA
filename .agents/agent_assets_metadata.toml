@@ -30,3 +30,9 @@ id = "B5W_hCNbjQtwu0kEfTsvD"
 uri = "file://MEDSAI/Resources/medsai_transparent3.gif"
 type = "image"
 title = "medsai_transparent3.gif"
+
+[[outputs]]
+id = "f9btKqDyDQDZOCWsa95sD"
+uri = "file://MEDSAI/Resources/istseh_logo_nobg.mp4"
+type = "video"
+title = "istseh_logo_nobg.mp4"
