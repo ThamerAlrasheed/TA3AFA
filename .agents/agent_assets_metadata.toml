@@ -36,3 +36,9 @@ id = "f9btKqDyDQDZOCWsa95sD"
 uri = "file://MEDSAI/Resources/istseh_logo_nobg.mp4"
 type = "video"
 title = "istseh_logo_nobg.mp4"
+
+[[outputs]]
+id = "8FeXOHSIvbu11I3mDuoJS"
+uri = "file://MEDSAI/Resources/frame6_nobg.mp4"
+type = "video"
+title = "frame6_nobg.mp4"
