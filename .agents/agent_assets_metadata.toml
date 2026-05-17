@@ -54,3 +54,9 @@ id = "D6IEAuPOpzSJ9kbTff2hn"
 uri = "file://MEDSAI/Resources/frame6_cropped.gif"
 type = "image"
 title = "frame6_cropped.gif"
+
+[[outputs]]
+id = "LZUIIq2GKQ6X-oU9YZTUx"
+uri = "file://MEDSAI/Resources/frame6_transparent.mov"
+type = "video"
+title = "frame6_transparent.mov"
