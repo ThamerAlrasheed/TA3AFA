@@ -60,3 +60,15 @@ id = "LZUIIq2GKQ6X-oU9YZTUx"
 uri = "file://MEDSAI/Resources/frame6_transparent.mov"
 type = "video"
 title = "frame6_transparent.mov"
+
+[[outputs]]
+id = "tjDa3UOE3MfEfc9ZDB3Ce"
+uri = "file://MEDSAI/Resources/frame6_transparent_v2.mov"
+type = "video"
+title = "frame6_transparent_v2.mov"
+
+[[outputs]]
+id = "3kNZyTYONzlvO4Jh_f3Uc"
+uri = "file://MEDSAI/Resources/frame6_transparent_v3.mov"
+type = "video"
+title = "frame6_transparent_v3.mov"
