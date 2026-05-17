@@ -48,3 +48,9 @@ id = "fcGz_9oBMDpo0WcxzOpyE"
 uri = "file://MEDSAI/Resources/frame6_nobg_hq.mp4"
 type = "video"
 title = "frame6_nobg_hq.mp4"
+
+[[outputs]]
+id = "D6IEAuPOpzSJ9kbTff2hn"
+uri = "file://MEDSAI/Resources/frame6_cropped.gif"
+type = "image"
+title = "frame6_cropped.gif"
