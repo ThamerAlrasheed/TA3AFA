@@ -72,3 +72,9 @@ id = "3kNZyTYONzlvO4Jh_f3Uc"
 uri = "file://MEDSAI/Resources/frame6_transparent_v3.mov"
 type = "video"
 title = "frame6_transparent_v3.mov"
+
+[[outputs]]
+id = "I2Zt9sB_phTh8O7xxqbxC"
+uri = "file://MEDSAI/Resources/frame6_1_transparent.gif"
+type = "image"
+title = "frame6_1_transparent.gif"
