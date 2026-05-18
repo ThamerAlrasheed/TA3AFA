@@ -1,8 +1,0 @@
-breakpoint set -f MediScheduleApp.swift -l 35
-process continue
-po PatientSessionStore.shared.deviceToken ?? "nil"
-po PatientSessionStore.shared.patientUserIDString ?? "nil"
-po PatientSessionStore.shared.activePatientID?.uuidString ?? "nil"
-po PatientSessionStore.shared.activePatientName ?? "nil"
-po PatientSessionStore.shared.userRoleRawValue ?? "nil"
-quit
