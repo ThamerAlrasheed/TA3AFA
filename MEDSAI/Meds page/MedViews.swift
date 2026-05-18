@@ -2,6 +2,8 @@ import SwiftUI
 import PhotosUI
 import Combine
 import Foundation
+import AVFoundation
+import UIKit
 
 // MARK: - Meds tab (per-user via Firestore)
 struct MedListView: View {
@@ -12,9 +14,11 @@ struct MedListView: View {
     @State private var showingAdd = false
     @State private var analyzedPayload: DrugPayload? = nil
     @State private var isPresentingPhotoPicker = false
+    @State private var isPresentingCamera = false
     @State private var selectedItem: PhotosPickerItem?
     @State private var selectedImage: UIImage?
     @State private var showUploadReview = false
+    @State private var cameraAlert: CameraAccessAlert?
 
     @State private var editMed: LocalMed? = nil
     @State private var infoMed: LocalMed? = nil
@@ -35,7 +39,7 @@ struct MedListView: View {
                         systemImage: "person.crop.circle.badge.exclamationmark",
                         description: Text("Please log in to view and manage your medications."))
                 } else if repo.isLoading {
-                    ProgressView("Loading medications…")
+                    BrandedLoadingView(message: LoadingMessage.medications.text, style: .fullScreen)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let err = repo.errorMessage {
                     ContentUnavailableView("Couldn’t load medications",
@@ -46,6 +50,7 @@ struct MedListView: View {
                         if repo.meds.isEmpty {
                             Text("No medications yet. Tap + to add.")
                                 .foregroundStyle(.secondary)
+                                .listRowBackground(Color.istsehCard)
                         }
 
                         ForEach(repo.meds, id: \.id) { med in
@@ -60,14 +65,18 @@ struct MedListView: View {
                                             sourceTrace: repo.safetySourceTrace
                                           )
                                       })
+                            .listRowBackground(Color.istsehCard)
                         }
                     }
                     .listStyle(.insetGrouped)
+                    .scrollContentBackground(.hidden)
                     .refreshable {
                         await repo.fetchMeds()
                     }
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.istsehPageBackground.ignoresSafeArea())
             .navigationTitle("Meds")
             .toolbar {
                 if settings.role == .caregiver {
@@ -88,7 +97,7 @@ struct MedListView: View {
                             Button { isPresentingPhotoPicker = true } label: {
                                 HStack { Text("Upload Med Picture"); Spacer(minLength: 8); menuIcon("photo.on.rectangle") }
                             }
-                            Button { /* camera later */ } label: {
+                            Button { openCamera() } label: {
                                 HStack { Text("Take a Picture of the Med"); Spacer(minLength: 8); menuIcon("camera") }
                             }
                         } label: { Image(systemName: "plus.circle.fill") }
@@ -125,6 +134,35 @@ struct MedListView: View {
                           selection: $selectedItem,
                           matching: .images,
                           photoLibrary: .shared())
+            .fullScreenCover(isPresented: $isPresentingCamera) {
+                CameraCaptureView { image in
+                    selectedImage = image
+                    showUploadReview = true
+                } onError: { message in
+                    if message != "cancelled" {
+                        cameraAlert = CameraAccessAlert(
+                            title: "Camera unavailable",
+                            message: friendlyCameraMessage(message),
+                            canOpenSettings: message.lowercased().contains("permission"),
+                            canChoosePhoto: true
+                        )
+                    }
+                }
+            }
+            .alert(cameraAlert?.title ?? "Camera", isPresented: Binding(
+                get: { cameraAlert != nil },
+                set: { if !$0 { cameraAlert = nil } }
+            )) {
+                if cameraAlert?.canOpenSettings == true {
+                    Button("Settings") { openAppSettings() }
+                }
+                if cameraAlert?.canChoosePhoto == true {
+                    Button("Choose Photo") { isPresentingPhotoPicker = true }
+                }
+                Button("OK", role: .cancel) { }
+            } message: {
+                Text(cameraAlert?.message ?? "")
+            }
             .onChange(of: selectedItem) { _, newItem in
                 guard let newItem else { return }
                 Task {
@@ -140,7 +178,7 @@ struct MedListView: View {
             // Info sheet
             .sheet(item: $infoMed) { med in
                 NavigationStack {
-                    MedDetailView(medName: med.name, catalogId: med.catalogId)
+                    MedDetailView(medName: med.name, catalogId: med.catalogId, med: med)
                         .navigationTitle("Details")
                         .navigationBarTitleDisplayMode(.inline)
                 }
@@ -187,12 +225,81 @@ struct MedListView: View {
             }
         }
     }
+
+    private func openCamera() {
+        guard UIImagePickerController.isSourceTypeAvailable(.camera) else {
+            cameraAlert = CameraAccessAlert(
+                title: "Camera unavailable",
+                message: "This device does not have an available camera. You can choose a medication photo from your library instead.",
+                canOpenSettings: false,
+                canChoosePhoto: true
+            )
+            return
+        }
+
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            isPresentingCamera = true
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { granted in
+                Task { @MainActor in
+                    if granted {
+                        isPresentingCamera = true
+                    } else {
+                        cameraAlert = CameraAccessAlert(
+                            title: "Camera access disabled",
+                            message: "Camera access is disabled. Enable it in Settings to scan medication.",
+                            canOpenSettings: true,
+                            canChoosePhoto: true
+                        )
+                    }
+                }
+            }
+        case .denied, .restricted:
+            cameraAlert = CameraAccessAlert(
+                title: "Camera access disabled",
+                message: "Camera access is disabled. Enable it in Settings to scan medication.",
+                canOpenSettings: true,
+                canChoosePhoto: true
+            )
+        @unknown default:
+            cameraAlert = CameraAccessAlert(
+                title: "Camera unavailable",
+                message: "We could not open the camera. You can choose a medication photo from your library instead.",
+                canOpenSettings: false,
+                canChoosePhoto: true
+            )
+        }
+    }
+
+    private func friendlyCameraMessage(_ message: String) -> String {
+        if message.lowercased().contains("permission") {
+            return "Camera access is disabled. Enable it in Settings to scan medication."
+        }
+        if message.lowercased().contains("no camera") {
+            return "This device does not have an available camera. You can choose a medication photo from your library instead."
+        }
+        return "We could not open the camera. You can choose a medication photo from your library instead."
+    }
+
+    private func openAppSettings() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
+    }
 }
 
 private struct SelectedSafetyWarning: Identifiable {
     let id = UUID()
     let warning: SafetyWarning
     let sourceTrace: [String]
+}
+
+private struct CameraAccessAlert: Identifiable {
+    let id = UUID()
+    let title: String
+    let message: String
+    let canOpenSettings: Bool
+    let canChoosePhoto: Bool
 }
 
 // MARK: - Row extracted to avoid complex type-checking
@@ -209,9 +316,23 @@ private struct MedRowView: View {
         let sortedWarnings = SafetyWarningPresentation.sorted(warnings)
 
         HStack(spacing: 12) {
+            MedicationVisualView(
+                form: med.medicationForm,
+                shapeID: med.visualShape,
+                medicationColorID: med.visualColor,
+                backgroundColorID: med.visualBackgroundColor,
+                size: 46
+            )
+
             VStack(alignment: .leading, spacing: 5) {
                 Text(med.name).font(.headline)
-                let subtitle = "\(med.dosage) • \(med.frequencyPerDay)x/day • \(med.foodRule.label)"
+                let isArabic = UserDefaults.standard.string(forKey: "appearance.language") == "ar"
+                let foodVisible = MedicationFormRules.shouldShowFoodTiming(formID: med.medicationForm, foodRule: med.foodRule, sourceBacked: med.foodRuleSource == "source")
+                let subtitle = [
+                    med.doseDisplay ?? med.dosage,
+                    med.scheduleSummary(isArabic: isArabic),
+                    foodVisible && !(med.scheduleMode.isPRN || med.asNeeded) ? med.foodRuleLabel(isArabic: isArabic) : nil
+                ].compactMap { $0 }.joined(separator: " • ")
                 Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
 
                 if let primaryWarning = sortedWarnings.first {
@@ -273,15 +394,11 @@ struct UploadPhotoView: View {
                         .blur(radius: isAnalyzing ? 3 : 0)
                     
                     if isAnalyzing {
-                        VStack(spacing: 12) {
-                            ProgressView()
-                                .controlSize(.large)
-                            Text("Analyzing Medication...")
-                                .font(.headline)
-                        }
+                        BrandedLoadingView(
+                            message: LoadingMessage.custom("Analyzing medication…", "جاري تحليل الدواء…").text,
+                            style: .card
+                        )
                         .padding(24)
-                        .background(.ultraThinMaterial)
-                        .clipShape(RoundedRectangle(cornerRadius: 16))
                     }
                 }
                 
@@ -330,7 +447,7 @@ struct UploadPhotoView: View {
     
     private func analyze() {
         guard let base64 = image.toBase64() else {
-            errorMessage = "Failed to process image."
+            errorMessage = "We couldn't prepare this photo. Please try again or choose another image."
             return
         }
         
@@ -345,9 +462,12 @@ struct UploadPhotoView: View {
                     scanResult = result
                 }
             } catch {
+                #if DEBUG
+                print("Medication photo analysis failed: \(error)")
+                #endif
                 await MainActor.run {
                     isAnalyzing = false
-                    errorMessage = "Analysis failed: \(error.localizedDescription)"
+                    errorMessage = "We couldn't analyze this photo. Please try again or choose a clearer image."
                 }
             }
         }

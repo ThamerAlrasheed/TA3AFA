@@ -68,6 +68,165 @@ func formatDosage(amount: Double, unit: DosageUnit) -> String {
     return "\(s) \(unit.rawValue)"
 }
 
+enum MedicationStrengthFormatter {
+    static func displayableStrengths(from rawValues: [String]) -> [String] {
+        var seen = Set<String>()
+        var cleaned: [String] = []
+
+        for raw in rawValues {
+            for fragment in strengthFragments(from: raw) {
+                guard let value = displayableStrength(from: fragment) else { continue }
+                let key = value.lowercased()
+                guard seen.insert(key).inserted else { continue }
+                cleaned.append(value)
+            }
+        }
+
+        return cleaned
+    }
+
+    static func displayableStrength(from rawValue: String) -> String? {
+        var value = addLeadingZeroToDecimals(rawValue)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "µg", with: "mcg")
+            .replacingOccurrences(of: "μg", with: "mcg")
+            .replacingOccurrences(of: #"(?i)\[iU\]"#, with: "IU", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)\bmicrograms?\b"#, with: "mcg", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)\bmilligrams?\b"#, with: "mg", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)\bmilliliters?\b"#, with: "mL", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)\bml\b"#, with: "mL", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)\biu\b"#, with: "IU", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"(?i)\bper\b"#, with: "/", options: .regularExpression)
+
+        guard !value.isEmpty else { return nil }
+
+        let lower = value.lowercased()
+        let hasTechnicalBracketUnit = value.range(of: #"\[[^\]]+\]"#, options: .regularExpression) != nil
+        if hasTechnicalBracketUnit || lower.contains("hp_") || lower.contains("arb'u") {
+            return nil
+        }
+
+        value = value
+            .replacingOccurrences(of: #"\s*/\s*1\s*(mL)\b"#, with: "/mL", options: .regularExpression)
+            .replacingOccurrences(of: #"\s*/\s*1\s*$"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: #"\s*/\s*"#, with: "/", options: .regularExpression)
+            .replacingOccurrences(of: #"(?<=\d)(mg|mcg|g|mL|IU)\b"#, with: " $1", options: .regularExpression)
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if value.contains("/") {
+            let parts = value.split(separator: "/", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { return nil }
+            let denominator = parts[1]
+            let denominatorHasDisplayUnit = denominator.range(
+                of: #"(?i)(mL|mg|mcg|g|IU|unit|units)\b"#,
+                options: .regularExpression
+            ) != nil
+            guard denominatorHasDisplayUnit else { return nil }
+        }
+
+        if let normalized = normalizedDoseExpression(value) {
+            return normalized
+        }
+
+        let hasDoseUnit = value.range(
+            of: #"(?i)\b\d+(?:\.\d+)?\s*(mg|mcg|g|mL|IU)\b"#,
+            options: .regularExpression
+        ) != nil
+        let hasCountUnit = value.range(
+            of: #"(?i)\b(tablet|tablets|capsule|capsules|gummy|gummies|drop|drops|puff|puffs|spray|sprays)\b"#,
+            options: .regularExpression
+        ) != nil
+
+        guard hasDoseUnit || hasCountUnit else { return nil }
+        return value
+    }
+
+    private static func strengthFragments(from rawValue: String) -> [String] {
+        let normalized = rawValue
+            .replacingOccurrences(of: ";", with: ",")
+            .replacingOccurrences(of: " and ", with: ", ", options: .caseInsensitive)
+
+        let pieces = normalized
+            .split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        return pieces.isEmpty ? [rawValue] : pieces
+    }
+
+    private static func addLeadingZeroToDecimals(_ raw: String) -> String {
+        let pattern = #"(^|[^0-9])\.(\d+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else { return raw }
+        let ns = raw as NSString
+        let matches = regex.matches(in: raw, range: NSRange(location: 0, length: ns.length)).reversed()
+        var value = raw
+
+        for match in matches {
+            guard match.numberOfRanges >= 3,
+                  let fullRange = Range(match.range(at: 0), in: value),
+                  let prefixRange = Range(match.range(at: 1), in: value),
+                  let digitsRange = Range(match.range(at: 2), in: value) else { continue }
+
+            let prefix = value[prefixRange]
+            let digits = value[digitsRange]
+            value.replaceSubrange(fullRange, with: "\(prefix)0.\(digits)")
+        }
+
+        return value
+    }
+
+    private static func normalizedDoseExpression(_ value: String) -> String? {
+        let pattern = #"(?i)^\s*([0-9]+(?:\.[0-9]+)?)\s*(mg|mcg|g|mL|IU)\s*(?:/\s*([0-9]+(?:\.[0-9]+)?)?\s*(mg|mcg|g|mL|IU|unit|units)?)?\s*$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: value, range: NSRange(location: 0, length: (value as NSString).length)) else {
+            return nil
+        }
+
+        func capture(_ index: Int) -> String? {
+            guard index < match.numberOfRanges, match.range(at: index).location != NSNotFound else { return nil }
+            return (value as NSString).substring(with: match.range(at: index))
+        }
+
+        guard let amount = capture(1), let unit = capture(2), let numericAmount = Double(amount) else { return nil }
+        let numerator = "\(formatNumber(numericAmount)) \(displayUnit(unit))"
+
+        guard let denominatorUnit = capture(4).map(displayUnit) else {
+            return numerator
+        }
+
+        if let denominatorAmount = capture(3).flatMap(Double.init), denominatorAmount != 1 {
+            return "\(numerator)/\(formatNumber(denominatorAmount)) \(denominatorUnit)"
+        }
+
+        if denominatorUnit == "unit" || denominatorUnit == "units" {
+            return numerator
+        }
+
+        return "\(numerator)/\(denominatorUnit)"
+    }
+
+    private static func displayUnit(_ raw: String) -> String {
+        switch raw.lowercased() {
+        case "ml": return "mL"
+        case "iu": return "IU"
+        case "unit": return "unit"
+        case "units": return "units"
+        default: return raw.lowercased()
+        }
+    }
+
+    private static func formatNumber(_ value: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = false
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 4
+        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+}
+
 // MARK: - Scheduler v2 (awake-window aware + meal anchoring + FDA interval)
 
 enum Scheduler {
@@ -201,7 +360,7 @@ enum Scheduler {
             return Array(anchors.prefix(med.frequencyPerDay))
                 .map(clampInsideAwake)
 
-        case .none:
+        case .avoidWithFood, .notSure, .none:
             var anchors: [Date]
             switch med.frequencyPerDay {
             case 1: anchors = [shift(wake, minutes: wakeUpBufferMinutes)]
@@ -432,7 +591,7 @@ enum MedSummarizer {
 // MARK: - Keep scrolling content above the tab bar
 
 private struct TabBarAvoider: ViewModifier {
-    private let pad: CGFloat = 64
+    private let pad: CGFloat = 110
 
     func body(content: Content) -> some View {
         content

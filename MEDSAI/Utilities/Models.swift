@@ -2,13 +2,15 @@ import SwiftUI
 import SwiftData
 
 enum FoodRule: String, Codable, CaseIterable, Identifiable {
-    case beforeFood, afterFood, withFood, none
+    case beforeFood, afterFood, withFood, avoidWithFood, notSure, none
     var id: String { rawValue }
     var label: String {
         switch self {
         case .beforeFood: return "Before food"
         case .afterFood:  return "After food"
         case .withFood:   return "With food"
+        case .avoidWithFood: return "Avoid with food"
+        case .notSure: return "Not sure"
         case .none:       return "No food rule"
         }
     }
@@ -22,6 +24,8 @@ enum FoodRule: String, Codable, CaseIterable, Identifiable {
         case "beforefood": return .beforeFood
         case "afterfood": return .afterFood
         case "withfood": return .withFood
+        case "avoidwithfood", "avoidfood": return .avoidWithFood
+        case "notsure", "unknown": return .notSure
         default: return .none
         }
     }

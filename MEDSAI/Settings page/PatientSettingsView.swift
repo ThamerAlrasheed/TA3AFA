@@ -77,21 +77,8 @@ struct PatientSettingsView: View {
     }
     
     private func disconnect() {
-        // Clear session
-        PatientSessionStore.shared.clearAllSessionValuesBestEffort()
-        
-        // Reset app state
-        settings.role = .regular
-        settings.onboardingCompleted = false
-        settings.didChooseEntry = false
-        
-        // Any other cleanup
         Task {
-            do {
-                try await SupabaseManager.shared.client.auth.signOut()
-            } catch {
-                print("⚠️ Sign out failed:", error.localizedDescription)
-            }
+            await settings.signOutCompletely()
         }
     }
 }

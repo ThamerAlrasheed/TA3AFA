@@ -152,6 +152,51 @@ Deno.serve(async (req) => {
     return json(500, { error: `Failed to create care code: ${codeError.message}` });
   }
 
+  if (allergies.length > 0) {
+    const allergyRows = allergies.map((name) => ({
+      id: crypto.randomUUID(),
+      patient_id: patientId,
+      name,
+      severity: "unknown",
+      reaction: null,
+      notes: null,
+      is_active: true,
+      created_by: caregiverId,
+      updated_at: new Date().toISOString(),
+    }));
+
+    const { error: allergyError } = await admin.from("patient_allergies").insert(allergyRows);
+    if (allergyError) {
+      await admin.from("care_codes").delete().eq("id", codeRow.id);
+      await admin.from("caregiver_relations").delete().eq("patient_id", patientId);
+      await admin.from("users").delete().eq("id", patientId);
+      return json(500, { error: `Failed to save patient allergies: ${allergyError.message}` });
+    }
+  }
+
+  if (conditions.length > 0) {
+    const conditionRows = conditions.map((name) => ({
+      id: crypto.randomUUID(),
+      patient_id: patientId,
+      name,
+      status: "active",
+      diagnosed_at: null,
+      notes: null,
+      is_active: true,
+      created_by: caregiverId,
+      updated_at: new Date().toISOString(),
+    }));
+
+    const { error: conditionError } = await admin.from("patient_conditions").insert(conditionRows);
+    if (conditionError) {
+      await admin.from("patient_allergies").delete().eq("patient_id", patientId);
+      await admin.from("care_codes").delete().eq("id", codeRow.id);
+      await admin.from("caregiver_relations").delete().eq("patient_id", patientId);
+      await admin.from("users").delete().eq("id", patientId);
+      return json(500, { error: `Failed to save patient conditions: ${conditionError.message}` });
+    }
+  }
+
   // Audit Log
   await logAudit(admin, {
     patient_id: patientId,

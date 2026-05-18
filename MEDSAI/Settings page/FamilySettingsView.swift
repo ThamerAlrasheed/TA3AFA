@@ -385,7 +385,11 @@ struct ManagedPatientSettingsView: View {
         }
         .overlay {
             if isSaving {
-                ProgressView().controlSize(.large)
+                BrandedLoadingView(
+                    message: LoadingMessage.custom("Saving…", "جاري الحفظ…").text,
+                    style: .card
+                )
+                .padding(.horizontal, 28)
             }
         }
     }
@@ -464,6 +468,8 @@ struct AddFamilyMemberView: View {
     @State private var dob = Date()
     @State private var allergies: [String] = []
     @State private var conditions: [String] = []
+    @State private var pendingCustomAllergy = ""
+    @State private var pendingCustomCondition = ""
     
     // Initial Settings
     @State private var canAddMeds = true
@@ -481,84 +487,110 @@ struct AddFamilyMemberView: View {
     
     var body: some View {
         NavigationStack {
-            Form {
+            ScrollView {
                 if let code = generatedCode {
-                    Section {
+                    ISTSEHCard {
                         VStack(spacing: 16) {
-                            Text("Profile Created!")
-                                .font(.headline)
-                            
-                            Text("Share this code with \(firstName):")
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
-                            
-                            Text(formatCode(code))
-                                .font(.system(size: 42, weight: .bold, design: .monospaced))
-                                .tracking(8)
-                                .padding()
-                                .background(Color(.secondarySystemBackground))
-                                .clipShape(RoundedRectangle(cornerRadius: 12))
-                            
-                            Text("This code expires in 72 hours.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            
-                            Button("Copy Code") {
-                                UIPasteboard.general.string = code
-                            }
-                            .buttonStyle(.bordered)
-                            .tint(Color.istsehGreen)
+                        Text("Profile Created!")
+                            .font(.headline)
+                        
+                        Text("Share this code with \(firstName):")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                        
+                        Text(formatCode(code))
+                            .font(.system(size: 42, weight: .bold, design: .monospaced))
+                            .tracking(8)
+                            .padding()
+                            .background(Color.istsehCard)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.istsehCardStroke, lineWidth: 1)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                        
+                        Text("This code expires in 72 hours.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        
+                        Button("Copy Code") {
+                            UIPasteboard.general.string = code
                         }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 20)
+                        .buttonStyle(.bordered)
+                        .tint(Color.istsehGreen)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 6)
                     }
                 } else {
-                    Section {
+                    VStack(spacing: 16) {
+                    ISTSEHCard {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Patient Information")
+                                .font(.headline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
                         TextField("First Name", text: $firstName)
+                                .textInputAutocapitalization(.words)
+                                .padding(12)
+                                .background(Color.istsehPageBackground.opacity(0.55))
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         TextField("Last Name", text: $lastName)
+                                .textInputAutocapitalization(.words)
+                                .padding(12)
+                                .background(Color.istsehPageBackground.opacity(0.55))
+                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
                         DatePicker("Date of Birth", selection: $dob, in: ...Date(), displayedComponents: .date)
-                    } header: {
-                        Text("Patient Information")
+                                .tint(Color.istsehGreen)
+                    }
                     }
                     
-                    Section {
-                        MultiSelectorView(
-                            title: "Allergies",
-                            presets: ["Peanuts", "Milk", "Eggs", "Tree Nuts", "Soy", "Wheat", "Fish", "Shellfish", "Penicillin", "Aspirin", "Ibuprofen", "Latex"],
-                            selectedItems: $allergies
+                        AllergySelectionSection(
+                            selectedItems: $allergies,
+                            pendingCustomText: $pendingCustomAllergy
                         )
                         .padding(.vertical, 4)
                         
-                        MultiSelectorView(
-                            title: "Chronic Conditions",
-                            presets: ["Diabetes", "Hypertension", "Asthma", "Arthritis", "CKD", "COPD", "Heart Disease", "Anxiety", "Depression"],
-                            selectedItems: $conditions
+                        ConditionSelectionSection(
+                            selectedItems: $conditions,
+                            pendingCustomText: $pendingCustomCondition
                         )
                         .padding(.vertical, 4)
-                    } header: {
-                        Text("Medical Details")
-                    }
                     
-                    Section {
+                    ISTSEHCard {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Initial Permissions")
+                                .font(.headline.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+
                         Toggle("Can add medications", isOn: $canAddMeds)
                         Toggle("Can manage calendar", isOn: $canManageCalendar)
                         Toggle("Medication Reminders", isOn: $notifyMeds)
                         Toggle("Appointment Reminders", isOn: $notifyApps)
-                    } header: {
-                        Text("Initial Permissions")
-                    } footer: {
                         Text("These settings can be changed later in the patient's settings.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 4)
+                        }
                     }
                     
                     if let err = errorText {
-                        Section {
                             Text(err)
                                 .font(.footnote)
                                 .foregroundStyle(.red)
-                        }
+                                .multilineTextAlignment(.center)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                    }
                     }
                 }
             }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 18)
+            .avoidsTabBar()
+            .background(Color.istsehPageBackground.ignoresSafeArea())
             .navigationTitle("Add Family Member")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -584,6 +616,7 @@ struct AddFamilyMemberView: View {
             }
             return
         }
+        guard applyPendingCustomItems() else { return }
         isSaving = true
         errorText = nil
         defer { isSaving = false }
@@ -611,6 +644,28 @@ struct AddFamilyMemberView: View {
                 errorText = friendlyErrorMessage(for: error)
             }
         }
+    }
+
+    @discardableResult
+    private func applyPendingCustomItems() -> Bool {
+        let pendingAllergy = pendingCustomAllergy.trimmingCharacters(in: .whitespacesAndNewlines)
+        let pendingCondition = pendingCustomCondition.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        if !pendingAllergy.isEmpty {
+            errorText = MedicalProfileText.isArabic
+                ? "اضغط إضافة لحفظ الحساسية المخصصة أو امسح الحقل."
+                : "Tap Add to save the custom allergy or clear the field."
+            return false
+        }
+
+        if !pendingCondition.isEmpty {
+            errorText = MedicalProfileText.isArabic
+                ? "اضغط إضافة لحفظ المرض المزمن المخصص أو امسح الحقل."
+                : "Tap Add to save the custom condition or clear the field."
+            return false
+        }
+
+        return true
     }
 
     private func friendlyErrorMessage(for error: Error) -> String {

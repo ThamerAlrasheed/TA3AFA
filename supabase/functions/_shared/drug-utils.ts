@@ -402,8 +402,10 @@ STRICT RULES:
 3. If a field (e.g. food_rule, interactions) is not mentioned in the source data, return an empty array or null (for numbers) or "none" (for food_rule).
 4. DO NOT invent safety warnings or medical advice not found in the source.
 5. BULLET POINTS must be 10 words or less and patient-friendly.
-6. Translation: If requested, provide high-quality medical translation for the strings.
-7. Format: Return ONLY valid JSON matching the requested schema.
+6. Remove FDA section numbers/headings, reference IDs, hyperlink errors, table references, and broken numbering.
+7. Never return raw strings like "1 INDICATIONS AND USAGE", "6 ADVERSE REACTIONS", or "Error! Hyperlink reference not valid."
+8. Translation: If requested, provide high-quality medical translation for the strings.
+9. Format: Return ONLY valid JSON matching the requested schema.
 
 Schema keys:
 - title, strengths, food_rule, min_interval_hours, interactions_to_avoid, common_side_effects, how_to_take, what_for, safety_warnings
@@ -429,6 +431,217 @@ export function validateDrugSummary(data: any): data is DrugSummary {
   }
 
   return true;
+}
+
+// --- Patient-facing normalization ---
+
+const SECTION_HEADINGS = [
+  "BOXED WARNING",
+  "INDICATIONS AND USAGE",
+  "DOSAGE AND ADMINISTRATION",
+  "DOSAGE FORMS AND STRENGTHS",
+  "CONTRAINDICATIONS",
+  "WARNINGS AND PRECAUTIONS",
+  "WARNINGS",
+  "PRECAUTIONS",
+  "ADVERSE REACTIONS",
+  "DRUG INTERACTIONS",
+  "USE IN SPECIFIC POPULATIONS",
+  "OVERDOSAGE",
+  "DESCRIPTION",
+  "CLINICAL PHARMACOLOGY",
+  "NONCLINICAL TOXICOLOGY",
+  "CLINICAL STUDIES",
+  "HOW SUPPLIED/STORAGE AND HANDLING",
+  "PATIENT COUNSELING INFORMATION",
+  "INFORMATION FOR PATIENTS",
+  "MEDICATION GUIDE",
+].map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+
+const SECTION_HEADING_RE = new RegExp(
+  `(^|[\\n.;])\\s*(?:\\d+(?:\\.\\d+)?\\s+)?(?:${SECTION_HEADINGS.join("|")})\\b\\s*[:.\\-–—]?\\s*`,
+  "gim",
+);
+
+export function sanitizePatientText(input: unknown, maxCharacters = 1200): string {
+  let text = Array.isArray(input) ? input.filter(Boolean).join("\n\n") : String(input ?? "");
+  text = text
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\r/g, "\n")
+    .replace(/\u00a0/g, " ")
+    .replace(/[•·‣]/g, "\n• ")
+    .replace(/\berror!\s*hyperlink reference not valid\.?/gi, " ")
+    .replace(/\breference id:\s*[a-z0-9-]+/gi, " ")
+    .replace(/\bsee\s+(?:warnings and precautions|adverse reactions|drug interactions|clinical studies|full prescribing information)\s*\([^)]+\)/gi, " ")
+    .replace(SECTION_HEADING_RE, "$1")
+    .replace(/(^|\n)\s*(?:[-*•]\s*)?(?:\d+\s*\)\]\s*|\(?\d+(?:\.\d+)?\)?[\].)]\s*)/gm, "$1")
+    .replace(/(^|\n)\s*[-*•]+\s*/gm, "$1")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+
+  text = text.replace(/^[:;,\-.–—\s]+/, "").trim();
+  if (!isUsefulPatientText(text)) return "";
+  if (text.length <= maxCharacters) return text;
+
+  const clipped = text.slice(0, maxCharacters);
+  const sentenceEnd = Math.max(clipped.lastIndexOf("."), clipped.lastIndexOf(";"), clipped.lastIndexOf(":"));
+  if (sentenceEnd > 80) return clipped.slice(0, sentenceEnd + 1).trim();
+  return `${clipped.slice(0, clipped.lastIndexOf(" ")).trim()}...`;
+}
+
+export function sanitizePatientList(values: unknown, max = 5): string[] {
+  const rawValues = Array.isArray(values) ? values : [values];
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  for (const raw of rawValues) {
+    const prepared = String(raw ?? "")
+      .replace(/\s+(?=\d+\s*\)\])/g, "\n")
+      .replace(/\s+(?=\(?\d+\)?[\].)]\s+[A-Z])/g, "\n")
+      .replace(/[-*]\s*•/g, "\n•")
+      .replace(/[•·‣]/g, "\n• ");
+
+    const parts = prepared
+      .split(/\n|;/)
+      .flatMap((part) => part.length > 220 ? part.replace(/\.\s+/g, ".\n").split("\n") : [part]);
+
+    for (const part of parts) {
+      const clean = sanitizePatientText(part, 180);
+      if (!clean || isSourceBoilerplate(clean)) continue;
+      const key = canonicalTextKey(clean);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(clean);
+      if (out.length >= max) return out;
+    }
+  }
+
+  return out;
+}
+
+export function normalizeStrengths(values: unknown): string[] {
+  const rawValues = Array.isArray(values) ? values : [values];
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  for (const raw of rawValues) {
+    const fragments = String(raw ?? "")
+      .replace(/;/g, ",")
+      .replace(/\sand\s/gi, ", ")
+      .split(",")
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    for (const fragment of fragments.length ? fragments : [String(raw ?? "")]) {
+      const normalized = normalizeStrength(fragment);
+      if (!normalized) continue;
+      const key = normalized.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(normalized);
+    }
+  }
+
+  return out;
+}
+
+export function normalizeDrugSummary(summary: DrugSummary): DrugSummary {
+  return {
+    ...summary,
+    title: sanitizePatientText(summary.title, 120) || summary.title,
+    strengths: normalizeStrengths(summary.strengths),
+    active_ingredients: sanitizePatientList(summary.active_ingredients ?? [], 12),
+    interactions_to_avoid: sanitizePatientList(summary.interactions_to_avoid, 4),
+    common_side_effects: sanitizePatientList(summary.common_side_effects, 5),
+    how_to_take: sanitizePatientList(summary.how_to_take, 5),
+    what_for: sanitizePatientList(summary.what_for, 4),
+    safety_warnings: sanitizePatientList(summary.safety_warnings, 5),
+  };
+}
+
+function normalizeStrength(raw: string): string | null {
+  let value = raw
+    .trim()
+    .replace(/(^|[^0-9])\.(\d+)/g, "$10.$2")
+    .replace(/[µμ]g/g, "mcg")
+    .replace(/\[iU\]/gi, "IU")
+    .replace(/\bmicrograms?\b/gi, "mcg")
+    .replace(/\bmilligrams?\b/gi, "mg")
+    .replace(/\bmilliliters?\b/gi, "mL")
+    .replace(/\bml\b/gi, "mL")
+    .replace(/\biu\b/gi, "IU")
+    .replace(/\bper\b/gi, "/")
+    .replace(/\s+/g, " ");
+
+  if (!value || /\[[^\]]+\]/.test(value) || /hp_|arb'u/i.test(value)) return null;
+
+  value = value
+    .replace(/\s*\/\s*1\s*(mL)\b/g, "/mL")
+    .replace(/\s*\/\s*1\s*$/g, "")
+    .replace(/\s*\/\s*/g, "/")
+    .replace(/(\d)(mg|mcg|g|mL|IU)\b/g, "$1 $2")
+    .trim();
+
+  const match = value.match(/^([0-9]+(?:\.[0-9]+)?)\s*(mg|mcg|g|mL|IU)(?:\/([0-9]+(?:\.[0-9]+)?)?\s*(mg|mcg|g|mL|IU|unit|units))?$/i);
+  if (match) {
+    const amount = formatStrengthNumber(Number(match[1]));
+    const unit = displayStrengthUnit(match[2]);
+    const denominatorAmount = match[3] ? Number(match[3]) : null;
+    const denominatorUnit = match[4] ? displayStrengthUnit(match[4]) : null;
+    if (!denominatorUnit) return `${amount} ${unit}`;
+    if (denominatorUnit === "unit" || denominatorUnit === "units") return `${amount} ${unit}`;
+    if (denominatorAmount && denominatorAmount !== 1) {
+      return `${amount} ${unit}/${formatStrengthNumber(denominatorAmount)} ${denominatorUnit}`;
+    }
+    return `${amount} ${unit}/${denominatorUnit}`;
+  }
+
+  if (!/\d+(?:\.\d+)?\s*(mg|mcg|g|mL|IU)\b/i.test(value) &&
+      !/\b(tablet|tablets|capsule|capsules|gummy|gummies|drop|drops|puff|puffs|spray|sprays)\b/i.test(value)) {
+    return null;
+  }
+
+  return value;
+}
+
+function isUsefulPatientText(value: string): boolean {
+  const lower = value.toLowerCase();
+  if (value.length < 3) return false;
+  if (lower.includes("error! hyperlink reference not valid")) return false;
+  if (/^reference id:/.test(lower)) return false;
+  if (/^(?:\d+|\d+\.\d+)$/.test(lower)) return false;
+  if (/^(?:table|figure)\s+\d+/.test(lower)) return false;
+  return true;
+}
+
+function isSourceBoilerplate(value: string): boolean {
+  const lower = value.toLowerCase();
+  return [
+    /^the following clinically significant adverse reactions/,
+    /^because clinical trials are conducted/,
+    /^the data described below reflect/,
+    /^to report suspected adverse reactions/,
+    /^see full prescribing information/,
+    /^see warnings and precautions/,
+    /^these highlights do not include all the information/,
+  ].some((pattern) => pattern.test(lower));
+}
+
+function canonicalTextKey(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function displayStrengthUnit(unit: string): string {
+  switch (unit.toLowerCase()) {
+    case "ml": return "mL";
+    case "iu": return "IU";
+    default: return unit.toLowerCase();
+  }
+}
+
+function formatStrengthNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(4)));
 }
 
 // --- Source Fetching ---
@@ -461,16 +674,16 @@ export async function fetchOpenFDA(rxcui: string) {
     const result = data.results?.[0];
     if (!result) return null;
     
-    const text = [
+    const text = sanitizePatientText([
       result.description,
       result.dosage_and_administration,
       result.indications_and_usage,
       result.adverse_reactions,
       result.warnings,
       result.precautions
-    ].filter(Boolean).join("\n\n");
+    ].flatMap((value) => Array.isArray(value) ? value : value ? [value] : []));
     
-    return { text, url };
+    return text ? { text, url, normalized_version: "patient-label-v1" } : null;
   } catch { return null; }
 }
 
@@ -568,7 +781,7 @@ export async function saveAISummaryCache(
       locale: params.locale,
       model: params.model,
       prompt_version: params.prompt_version,
-      summary: params.summary,
+      summary: normalizeDrugSummary(params.summary),
       source_cache_ids: params.source_cache_ids,
       expires_at: expiresAt.toISOString(),
       cache_scope: "public"

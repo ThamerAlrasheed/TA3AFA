@@ -267,7 +267,20 @@ Deno.serve(async (req) => {
       return jsonResponse({ success: true });
     }
 
-    return jsonResponse({ error: "Invalid action" }, 400);
+    return jsonResponse({
+      error: "invalid_action",
+      message: `Unsupported patient-profile action: ${action ?? "missing"}`,
+      expected: [
+        "list_allergies",
+        "save_allergy",
+        "deactivate_allergy",
+        "list_conditions",
+        "save_condition",
+        "deactivate_condition",
+        "get_routine",
+        "update_routine",
+      ],
+    }, 400);
 
   } catch (e) {
     console.error("patient-profile error:", e);

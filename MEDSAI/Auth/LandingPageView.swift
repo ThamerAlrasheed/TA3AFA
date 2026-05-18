@@ -1,10 +1,15 @@
 import SwiftUI
 
 struct LandingPageView: View {
+    @AppStorage("appearance.language") private var languageCode: String =
+        Locale.current.language.languageCode?.identifier ?? "en"
+
+    private var isArabic: Bool { languageCode == "ar" }
+
     var body: some View {
         NavigationStack {
             ZStack {
-                Color(.systemBackground).ignoresSafeArea()
+                Color.istsehPageBackground.ignoresSafeArea()
 
                 VStack {
                     // Logo + Name at the top
@@ -13,32 +18,32 @@ struct LandingPageView: View {
                             .resizable()
                             .scaledToFit()
                             .frame(width: 110, height: 110)
-                            .foregroundStyle(.green)
+                            .foregroundStyle(Color.istsehGreen)
                         Text("ISTSEH")
                             .font(.system(size: 40, weight: .bold, design: .rounded))
-                        Text("Your personal medication assistant")
+                        Text(copy("Your personal medication assistant", "مساعدك الشخصي لتنظيم الأدوية"))
                             .font(.title3)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                     }
-                    .padding(.top, 80)
+                    .padding(.top, 48)
 
                     Spacer()
 
                     // Buttons block centered
                     VStack(spacing: 20) {
                         NavigationLink(destination: SignUpPageView()) {
-                            Text("Sign Up")
+                            Text(copy("Sign Up", "إنشاء حساب"))
                                 .font(.headline)
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 54)
                         }
                         .buttonStyle(.borderedProminent)
                         .controlSize(.large)
-                        .tint(.green)
+                        .tint(Color.istsehGreen)
 
                         NavigationLink(destination: LoginPageView()) {
-                            Text("Log In")
+                            Text(copy("Log In", "تسجيل الدخول"))
                                 .font(.headline)
                                 .frame(maxWidth: .infinity)
                                 .frame(height: 54)
@@ -46,7 +51,7 @@ struct LandingPageView: View {
                         .buttonStyle(.bordered)
                         .controlSize(.large)
 
-                        Text("── or ──")
+                        Text(copy("── or ──", "── أو ──"))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .padding(.top, 10)
@@ -54,21 +59,64 @@ struct LandingPageView: View {
                         NavigationLink(destination: CareCodeEntryView()) {
                             HStack {
                                 Image(systemName: "person.2.fill")
-                                Text("I Have a Family Code")
+                                Text(copy("I Have a Family Code", "لدي رمز عائلي"))
                             }
                             .font(.headline)
                             .frame(maxWidth: .infinity)
                             .frame(height: 54)
                         }
                         .buttonStyle(.plain)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(Color.istsehGreen)
                     }
                     .frame(maxWidth: 340)
 
                     Spacer() // balances above & below to center the buttons
                 }
                 .padding(.horizontal, 24)
+
+                VStack {
+                    HStack {
+                        Spacer()
+                        languageToggle
+                            .environment(\.layoutDirection, .leftToRight)
+                    }
+                    .padding(.top, 18)
+                    .padding(.horizontal, 24)
+                    Spacer()
+                }
             }
+            .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
         }
+    }
+
+    private var languageToggle: some View {
+        HStack(spacing: 6) {
+            languageButton(title: "EN", code: "en")
+            languageButton(title: "AR", code: "ar")
+        }
+        .padding(4)
+        .background(Color.istsehCard)
+        .clipShape(Capsule())
+        .overlay(Capsule().stroke(Color.istsehCardStroke, lineWidth: 1))
+    }
+
+    private func languageButton(title: String, code: String) -> some View {
+        Button {
+            languageCode = code
+        } label: {
+            Text(title)
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(languageCode == code ? Color.istsehGreen : Color.clear)
+                .foregroundStyle(languageCode == code ? .white : .primary)
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(code == "ar" ? "العربية" : "English")
+    }
+
+    private func copy(_ english: String, _ arabic: String) -> String {
+        isArabic ? arabic : english
     }
 }

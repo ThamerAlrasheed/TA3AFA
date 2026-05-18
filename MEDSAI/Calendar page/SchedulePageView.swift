@@ -38,8 +38,12 @@ struct SchedulePageView: View {
                 }
                 .padding(.bottom, 100)
             }
-            .background(Color(.systemGroupedBackground).ignoresSafeArea())
+            .background(Color.istsehPageBackground.ignoresSafeArea())
             .navigationTitle("Calendar")
+            .refreshable {
+                repo.start()
+                appts.start()
+            }
             .toolbar {
                 if settings.role == .caregiver {
                     ToolbarItem(placement: .topBarLeading) {
@@ -87,46 +91,51 @@ struct SchedulePageView: View {
 
             if appts.isLoading {
                 rowPadding(
-                    HStack { ProgressView(); Text("Loading appointments…") }
+                    BrandedLoadingView(message: LoadingMessage.appointments.text, style: .inline)
                 )
             } else if let err = appts.errorMessage {
                 rowPadding(
-                    ContentUnavailableView("Couldn't load appointments",
+                    ContentUnavailableView(LoadingMessage.scheduleError.text,
                                            systemImage: "exclamationmark.triangle",
                                            description: Text(err))
                 )
             } else if items.isEmpty {
-                VStack(alignment: .center, spacing: 10) {
-                    Text("No appointments on this day.")
-                        .foregroundStyle(.secondary)
+                rowPadding(
+                    VStack(alignment: .center, spacing: 10) {
+                        ISTSEHInlineEmptyState(
+                            systemImage: "calendar.badge.clock",
+                            title: LoadingMessage.noAppointmentsOnDay.text
+                        )
 
-                    if canEditAppointments {
-                        // Centered, perfectly centered text inside the green pill
-                        HStack {
-                            Spacer()
-                            CenteredPillButton(title: "Add appointment") {
-                                showAddAppointment = true
+                        if canEditAppointments {
+                            HStack {
+                                Spacer()
+                                CenteredPillButton(title: "Add appointment") {
+                                    showAddAppointment = true
+                                }
+                                .frame(maxWidth: 260)
+                                Spacer()
                             }
-                            .frame(maxWidth: 260)
-                            Spacer()
                         }
                     }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
+                )
             } else {
                 VStack(spacing: 0) {
                     ForEach(items) { appt in
                         VStack(alignment: .leading, spacing: 6) {
                             HStack(alignment: .top, spacing: 12) {
                                 VStack(alignment: .leading, spacing: 2) {
-                                    Text(appt.titleWithEmoji).font(.headline)
+                                    Text(appt.titleWithEmoji)
+                                        .font(.headline)
+                                        .foregroundStyle(.primary)
                                     if let loc = appt.location, !loc.isEmpty {
-                                        Text(loc).foregroundStyle(.secondary)
+                                        Text(loc)
+                                            .font(.subheadline)
+                                            .foregroundStyle(.secondary)
                                     }
                                     if let notes = appt.notes, !notes.isEmpty {
                                         Text(notes)
-                                            .font(.footnote)
+                                            .font(.subheadline)
                                             .foregroundStyle(.secondary)
                                             .lineLimit(2)
                                     }
@@ -137,6 +146,7 @@ struct SchedulePageView: View {
                                 Text(timeOnly(appt.date))
                                     .font(.headline)
                                     .monospacedDigit()
+                                    .foregroundStyle(.primary)
 
                                 if canEditAppointments {
                                     Menu {
@@ -190,18 +200,20 @@ struct SchedulePageView: View {
 
             if repo.isLoading {
                 rowPadding(
-                    HStack { ProgressView(); Text("Loading medications…") }
+                    BrandedLoadingView(message: LoadingMessage.medications.text, style: .inline)
                 )
             } else if let err = repo.errorMessage {
                 rowPadding(
-                    ContentUnavailableView("Couldn't load medications",
+                    ContentUnavailableView(LoadingMessage.scheduleError.text,
                                            systemImage: "exclamationmark.triangle",
                                            description: Text(err))
                 )
             } else if dayDoses.isEmpty {
                 rowPadding(
-                    ContentUnavailableView("No doses on this day",
-                                           systemImage: "calendar.badge.exclamationmark")
+                    ISTSEHInlineEmptyState(
+                        systemImage: "calendar.badge.exclamationmark",
+                        title: LoadingMessage.noDosesOnDay.text
+                    )
                 )
             } else {
                 VStack(spacing: 0) {
@@ -210,10 +222,17 @@ struct SchedulePageView: View {
                         let time = pair.0
                         let med  = pair.1
 
-                        HStack {
+                        HStack(spacing: 12) {
+                            MedicationVisualView(
+                                form: med.medicationForm,
+                                shapeID: med.visualShape,
+                                medicationColorID: med.visualColor,
+                                backgroundColorID: med.visualBackgroundColor,
+                                size: 40
+                            )
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(med.name).font(.headline)
-                                Text("\(med.dosage) • \(foodRuleLabel(med.foodRule))")
+                                Text(med.doseActionText(isArabic: isArabic)).font(.headline)
+                                Text(medicationSubtitle(med))
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
                             }
@@ -241,43 +260,46 @@ struct SchedulePageView: View {
 
         let active = repo.meds.filter { med in
             guard !med.isArchived else { return false }
-            return (med.startDate ... med.endDate).contains(selectedDate)
+            return med.isScheduled(on: selectedDate)
         }
         if active.isEmpty {
             dayDoses = []
             return
         }
 
-        // Adapt LocalMed -> Medication (keep SAME IDs)
-        let adapted: [Medication] = active.map { m in
-            Medication(
-                id: m.id,
-                name: m.name,
-                dosage: m.dosage,
-                frequencyPerDay: m.frequencyPerDay,
-                startDate: m.startDate,
-                endDate: m.endDate,
-                foodRule: m.foodRule,
-                notes: m.notes,
-                ingredients: m.ingredients,
-                minIntervalHours: m.minIntervalHours,
-                rxcui: m.rxcui,
-                dosageTimes: m.dosageTimes
-            )
-        }
-
-        let pairs = Scheduler.buildAdherenceSchedule(
-            meds: adapted,
-            settings: settings,
-            date: selectedDate
-        )
-
-        let byId: [String: LocalMed] = Dictionary(uniqueKeysWithValues: active.map { ($0.id, $0) })
-        let display: [(Date, LocalMed)] = pairs.compactMap { (t, med) in
-            guard let local = byId[med.id] else { return nil }
-            return (t, local)
+        let display: [(Date, LocalMed)] = active.flatMap { med in
+            doseDates(for: med, on: selectedDate).map { ($0, med) }
         }
         dayDoses = display.sorted { $0.0 < $1.0 }
+    }
+
+    private func doseDates(for med: LocalMed, on date: Date) -> [Date] {
+        let cal = Calendar.current
+        let base = cal.startOfDay(for: date)
+        let explicitTimes = med.dosageTimes.compactMap { timeString -> Date? in
+            let parts = timeString.split(separator: ":")
+            guard parts.count >= 2, let hour = Int(parts[0]), let minute = Int(parts[1]) else { return nil }
+            return cal.date(bySettingHour: hour, minute: minute, second: 0, of: base)
+        }
+        if !explicitTimes.isEmpty { return explicitTimes }
+
+        let adapted = Medication(
+            id: med.id,
+            name: med.name,
+            dosage: med.dosage,
+            frequencyPerDay: med.frequencyPerDay,
+            startDate: med.startDate,
+            endDate: med.endDate,
+            foodRule: med.foodRule,
+            notes: med.notes,
+            ingredients: med.ingredients,
+            minIntervalHours: med.minIntervalHours,
+            rxcui: med.rxcui,
+            dosageTimes: nil,
+            asNeeded: med.asNeeded,
+            isManualSchedule: med.isManualSchedule
+        )
+        return Scheduler.preferredTimes(for: adapted, on: base, settings: settings)
     }
 
     // MARK: - Formatting helpers
@@ -293,8 +315,25 @@ struct SchedulePageView: View {
         case .beforeFood: return "Before food"
         case .afterFood:  return "After food"
         case .withFood:   return "With food"
+        case .avoidWithFood: return "Avoid with food"
+        case .notSure: return "Not sure"
         case .none:       return "No food rule"
         }
+    }
+
+    private func medicationSubtitle(_ med: LocalMed) -> String {
+        let food = MedicationFormRules.shouldShowFoodTiming(
+            formID: med.medicationForm,
+            foodRule: med.foodRule,
+            sourceBacked: med.foodRuleSource == "source"
+        ) ? med.foodRuleLabel(isArabic: isArabic) : nil
+        return [med.scheduleSummary(isArabic: isArabic), food]
+            .compactMap { $0 }
+            .joined(separator: " • ")
+    }
+
+    private var isArabic: Bool {
+        UserDefaults.standard.string(forKey: "appearance.language") == "ar"
     }
 
     private func timeOnly(_ date: Date) -> String {
@@ -315,10 +354,10 @@ private struct SectionCard<Content: View>: View {
         VStack(alignment: .leading, spacing: 0) {
             content
         }
-        .background(Color(.systemBackground))
+        .background(Color.istsehCard)
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.primary.opacity(0.06))
+                .stroke(Color.istsehCardStroke, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .padding(.horizontal, 12)

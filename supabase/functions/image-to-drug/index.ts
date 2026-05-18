@@ -16,14 +16,16 @@ Deno.serve(async (req) => {
 
   const OPENAI_API_KEY = Deno.env.get("OPENAI_API_KEY");
   if (!OPENAI_API_KEY) {
-    return jsonResponse({ error: "Missing OPENAI_API_KEY" }, 500);
+    return errorResponse("configuration_error", "Image analysis service is not configured.", 503);
   }
 
   try {
     const { image } = await req.json();
-    if (!image) {
-      return jsonResponse({ error: "Missing 'image' (base64 string)" }, 400);
+    if (typeof image !== "string" || image.trim().length < 256) {
+      return errorResponse("invalid_image", "A valid image is required.", 400);
     }
+
+    const normalizedImage = image.trim();
 
     const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
     
@@ -44,7 +46,7 @@ Deno.serve(async (req) => {
               {
                 type: "image_url",
                 image_url: {
-                  url: image.startsWith("data:") ? image : `data:image/jpeg;base64,${image}`,
+                  url: normalizedImage.startsWith("data:") ? normalizedImage : `data:image/jpeg;base64,${normalizedImage}`,
                 },
               },
             ],
@@ -60,6 +62,11 @@ Deno.serve(async (req) => {
           const sorted = parsed.candidates
             .sort((a, b) => b.confidence - a.confidence)
             .slice(0, 3);
+
+          if (sorted.length === 0) {
+            console.warn(`Image analysis returned no candidates (Attempt ${attempts})`);
+            continue;
+          }
 
           const topConfidence = sorted[0]?.confidence || 0;
           result = {
@@ -78,17 +85,18 @@ Deno.serve(async (req) => {
     }
 
     if (!result) {
-      return jsonResponse({ error: "Failed to identify medication from image." }, 500);
+      return errorResponse("analysis_failed", "Unable to analyze image.", 502);
     }
 
     // IMPORTANT: No saveMedicationToDB here. 
     // The client must confirm the candidate before any DB write happens.
 
-    return jsonResponse(result);
+    return jsonResponse({ success: true, source: "ai_image_analysis", ...result });
 
   } catch (e) {
     console.error("image-to-drug error:", e);
-    return jsonResponse({ error: e.message ?? "Unknown error" }, 500);
+    const message = e instanceof Error ? e.message : "Unknown error";
+    return errorResponse("analysis_failed", "Unable to analyze image.", 500, { detail: message });
   }
 });
 
@@ -97,4 +105,13 @@ function jsonResponse(body: any, status = 200) {
     status,
     headers: { ...corsHeaders, "Content-Type": "application/json" },
   });
+}
+
+function errorResponse(error: string, message: string, status = 500, metadata: Record<string, unknown> = {}) {
+  return jsonResponse({
+    success: false,
+    error,
+    message,
+    ...metadata,
+  }, status);
 }

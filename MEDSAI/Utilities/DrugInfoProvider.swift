@@ -4,13 +4,26 @@ import UIKit
 
 // MARK: - UIImage Helpers
 extension UIImage {
-    func toBase64(maxSizeInBytes: Int = 1_000_000) -> String? {
+    func resizedForMedicationAnalysis(maxDimension: CGFloat = 1400) -> UIImage {
+        let longestSide = max(size.width, size.height)
+        guard longestSide > maxDimension else { return self }
+
+        let scale = maxDimension / longestSide
+        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: newSize)
+        return renderer.image { _ in
+            self.draw(in: CGRect(origin: .zero, size: newSize))
+        }
+    }
+
+    func toBase64(maxDimension: CGFloat = 1400, maxSizeInBytes: Int = 850_000) -> String? {
+        let image = resizedForMedicationAnalysis(maxDimension: maxDimension)
         var compression: CGFloat = 0.9
-        var data = self.jpegData(compressionQuality: compression)
+        var data = image.jpegData(compressionQuality: compression)
         
         while (data?.count ?? 0) > maxSizeInBytes && compression > 0.1 {
             compression -= 0.1
-            data = self.jpegData(compressionQuality: compression)
+            data = image.jpegData(compressionQuality: compression)
         }
         
         return data?.base64EncodedString()
@@ -249,6 +262,7 @@ private struct BackendPayload: Codable {
     let common_side_effects: [String]?
     let how_to_take: [String]?
     let what_for: [String]?
+    let safety_warnings: [String]?
     let rxcui: String?
     let id: String?
 }
@@ -268,55 +282,48 @@ enum DrugInfo: DrugInfoProvider {
             }
         }()
 
-        // Helper to ensure lists are summarized and concise
-        func summarize(_ list: [String]?) -> [String] {
-            guard let list = list, !list.isEmpty else { return [] }
-            let combined = list.joined(separator: "\n")
-            return MedSummarizer.bullets(from: combined, max: 4)
-        }
-
-        return DrugPayload(
+        let payload = DrugPayload(
             title: (b.title?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? fallbackTitle,
-            strengths: b.strengths ?? [],
+            strengths: MedicationStrengthFormatter.displayableStrengths(from: b.strengths ?? []),
             dosageForms: [],
             foodRule: mappedFood,
             minIntervalHours: b.min_interval_hours,
-            ingredients: b.active_ingredients ?? [],
-            indications: summarize(b.what_for),
-            howToTake: summarize(b.how_to_take),
-            commonSideEffects: summarize(b.common_side_effects),
-            importantWarnings: [],
-            interactionsToAvoid: summarize(b.interactions_to_avoid),
+            ingredients: PatientLabelSanitizer.cleanShortList(b.active_ingredients ?? []),
+            indications: b.what_for ?? [],
+            howToTake: b.how_to_take ?? [],
+            commonSideEffects: b.common_side_effects ?? [],
+            importantWarnings: b.safety_warnings ?? [],
+            interactionsToAvoid: b.interactions_to_avoid ?? [],
             references: nil,
             kbKey: nil,
             rxcui: b.rxcui,
             id: b.id.flatMap { UUID(uuidString: $0) }
         )
+        return payload.normalizedForPatientDisplay(fallbackTitle: fallbackTitle)
     }
 
     /// Build DrugPayload from openFDA MedDetails + strengths (fallback when backend fails)
     private static func payloadFromOpenFDA(medName: String, details: MedDetails, strengths: [String]) -> DrugPayload {
-        func summarize(_ s: String) -> [String] {
-            MedSummarizer.bullets(from: s, max: 4)
-        }
-
-        return DrugPayload(
+        let payload = DrugPayload(
             title: details.title.isEmpty ? medName : details.title,
-            strengths: strengths.isEmpty ? (details.dosage.isEmpty ? [] : [details.dosage]) : strengths,
+            strengths: MedicationStrengthFormatter.displayableStrengths(
+                from: strengths.isEmpty ? (details.dosage.isEmpty ? [] : [details.dosage]) : strengths
+            ),
             dosageForms: [],
             foodRule: nil,
             minIntervalHours: nil,
             ingredients: details.ingredients,
-            indications: summarize(details.uses),
-            howToTake: summarize(details.dosage),
-            commonSideEffects: summarize(details.sideEffects),
-            importantWarnings: summarize(details.warnings),
-            interactionsToAvoid: summarize(details.interactions),
+            indications: [details.uses],
+            howToTake: [details.dosage],
+            commonSideEffects: [details.sideEffects],
+            importantWarnings: [details.warnings],
+            interactionsToAvoid: [details.interactions],
             references: nil,
             kbKey: nil,
             rxcui: nil,
             id: nil
         )
+        return payload.normalizedForPatientDisplay(fallbackTitle: medName)
     }
 
     // MARK: - Public API
@@ -380,23 +387,65 @@ enum DrugInfo: DrugInfoProvider {
     // NAME → strength options (reuse the same call)
     static func fetchDosageOptions(name: String) async throws -> [String] {
         let payload = try await fetchDetails(name: name)
-        return payload.strengths
+        return MedicationStrengthFormatter.displayableStrengths(from: payload.strengths)
     }
 
     // IMAGE → candidates (send base64 to your Supabase Edge Function)
     static func analyzeImage(base64: String) async throws -> ScanResult {
+        struct ImageAnalysisRequest: Encodable {
+            let image: String
+        }
+
+        let trimmed = base64.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > 256 else {
+            throw NSError(
+                domain: "DrugInfo",
+                code: 422,
+                userInfo: [NSLocalizedDescriptionKey: "We couldn't analyze this photo. Please try again or choose a clearer image."]
+            )
+        }
+
         do {
+            #if DEBUG
+            print("image-to-drug request: function=image-to-drug, payload={ image: base64, characters: \(trimmed.count), dataURL: \(trimmed.hasPrefix("data:")) }")
+            #endif
+
             let result: ScanResult = try await SupabaseManager.shared.client.functions.invoke(
                 "image-to-drug",
                 options: .init(
-                    headers: ["apikey": SupabaseManager.shared.supabaseKey],
-                    body: ["image": base64]
+                    method: .post,
+                    headers: [
+                        "apikey": SupabaseManager.shared.supabaseKey,
+                        "Content-Type": "application/json"
+                    ],
+                    body: ImageAnalysisRequest(image: trimmed)
                 )
             )
             return result
+        } catch let error as FunctionsError {
+            #if DEBUG
+            switch error {
+            case let .httpError(code, data):
+                let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
+                print("image-to-drug response: status=\(code), body=\(body)")
+            case .relayError:
+                print("image-to-drug relay error: \(error)")
+            }
+            #endif
+            throw NSError(
+                domain: "DrugInfo",
+                code: 502,
+                userInfo: [NSLocalizedDescriptionKey: "We couldn't analyze this photo. Please try again or choose a clearer image."]
+            )
         } catch {
+            #if DEBUG
             print("Supabase image-to-drug error: \(error)")
-            throw error
+            #endif
+            throw NSError(
+                domain: "DrugInfo",
+                code: 502,
+                userInfo: [NSLocalizedDescriptionKey: "We couldn't analyze this photo. Please try again or choose a clearer image."]
+            )
         }
     }
 
@@ -538,6 +587,9 @@ enum DrugInfo: DrugInfoProvider {
                 "patient-profile",
                 options: .init(method: .post, headers: headers, body: request)
             )
+        } catch let error as FunctionsError {
+            logProfileFunctionError("patient-profile", error: error)
+            throw error
         } catch {
             print("Supabase patient-profile error: \(error)")
             throw error
@@ -547,6 +599,7 @@ enum DrugInfo: DrugInfoProvider {
     static func listAllergies(patientId: String?) async throws -> [Allergy] {
         struct Res: Decodable { let allergies: [Allergy] }
         let context = resolvedPatientRequestContext(patientId: patientId, deviceToken: SupabaseManager.shared.patientDeviceToken)
+        logProfileOwner(action: "list_allergies", context: context)
         let res: Res = try await invokeProfileFunction(ProfileRequest(
             action: "list_allergies",
             patient_id: context.patientId,
@@ -562,7 +615,8 @@ enum DrugInfo: DrugInfoProvider {
     static func saveAllergy(patientId: String?, allergy: Allergy) async throws {
         struct Res: Decodable { let success: Bool }
         let context = resolvedPatientRequestContext(patientId: patientId, deviceToken: SupabaseManager.shared.patientDeviceToken)
-        let _: Res = try await invokeProfileFunction(ProfileRequest(
+        logProfileOwner(action: "save_allergy", context: context)
+        let res: Res = try await invokeProfileFunction(ProfileRequest(
             action: "save_allergy",
             patient_id: context.patientId,
             device_token: context.deviceToken,
@@ -571,13 +625,17 @@ enum DrugInfo: DrugInfoProvider {
             id: nil,
             routine: nil
         ))
+        guard res.success else {
+            throw NSError(domain: "DrugInfo", code: 500, userInfo: [NSLocalizedDescriptionKey: "The allergy was not saved."])
+        }
         NotificationCenter.default.post(name: .medicalProfileChanged, object: nil)
     }
     
     static func deactivateAllergy(patientId: String?, id: String) async throws {
         struct Res: Decodable { let success: Bool }
         let context = resolvedPatientRequestContext(patientId: patientId, deviceToken: SupabaseManager.shared.patientDeviceToken)
-        let _: Res = try await invokeProfileFunction(ProfileRequest(
+        logProfileOwner(action: "deactivate_allergy", context: context)
+        let res: Res = try await invokeProfileFunction(ProfileRequest(
             action: "deactivate_allergy",
             patient_id: context.patientId,
             device_token: context.deviceToken,
@@ -586,12 +644,16 @@ enum DrugInfo: DrugInfoProvider {
             id: id,
             routine: nil
         ))
+        guard res.success else {
+            throw NSError(domain: "DrugInfo", code: 500, userInfo: [NSLocalizedDescriptionKey: "The allergy was not archived."])
+        }
         NotificationCenter.default.post(name: .medicalProfileChanged, object: nil)
     }
     
     static func listConditions(patientId: String?) async throws -> [Condition] {
         struct Res: Decodable { let conditions: [Condition] }
         let context = resolvedPatientRequestContext(patientId: patientId, deviceToken: SupabaseManager.shared.patientDeviceToken)
+        logProfileOwner(action: "list_conditions", context: context)
         let res: Res = try await invokeProfileFunction(ProfileRequest(
             action: "list_conditions",
             patient_id: context.patientId,
@@ -607,7 +669,8 @@ enum DrugInfo: DrugInfoProvider {
     static func saveCondition(patientId: String?, condition: Condition) async throws {
         struct Res: Decodable { let success: Bool }
         let context = resolvedPatientRequestContext(patientId: patientId, deviceToken: SupabaseManager.shared.patientDeviceToken)
-        let _: Res = try await invokeProfileFunction(ProfileRequest(
+        logProfileOwner(action: "save_condition", context: context)
+        let res: Res = try await invokeProfileFunction(ProfileRequest(
             action: "save_condition",
             patient_id: context.patientId,
             device_token: context.deviceToken,
@@ -616,13 +679,17 @@ enum DrugInfo: DrugInfoProvider {
             id: nil,
             routine: nil
         ))
+        guard res.success else {
+            throw NSError(domain: "DrugInfo", code: 500, userInfo: [NSLocalizedDescriptionKey: "The condition was not saved."])
+        }
         NotificationCenter.default.post(name: .medicalProfileChanged, object: nil)
     }
     
     static func deactivateCondition(patientId: String?, id: String) async throws {
         struct Res: Decodable { let success: Bool }
         let context = resolvedPatientRequestContext(patientId: patientId, deviceToken: SupabaseManager.shared.patientDeviceToken)
-        let _: Res = try await invokeProfileFunction(ProfileRequest(
+        logProfileOwner(action: "deactivate_condition", context: context)
+        let res: Res = try await invokeProfileFunction(ProfileRequest(
             action: "deactivate_condition",
             patient_id: context.patientId,
             device_token: context.deviceToken,
@@ -631,6 +698,9 @@ enum DrugInfo: DrugInfoProvider {
             id: id,
             routine: nil
         ))
+        guard res.success else {
+            throw NSError(domain: "DrugInfo", code: 500, userInfo: [NSLocalizedDescriptionKey: "The condition was not archived."])
+        }
         NotificationCenter.default.post(name: .medicalProfileChanged, object: nil)
     }
 
@@ -653,6 +723,9 @@ enum DrugInfo: DrugInfoProvider {
                 options: .init(method: .post, headers: headers, body: req)
             )
             return res.routine
+        } catch let error as FunctionsError {
+            logProfileFunctionError("patient-profile get_routine", error: error)
+            throw error
         } catch {
             print("Supabase get_routine error: \(error)")
             throw error
@@ -677,6 +750,9 @@ enum DrugInfo: DrugInfoProvider {
                 "patient-profile",
                 options: .init(method: .post, headers: headers, body: req)
             )
+        } catch let error as FunctionsError {
+            logProfileFunctionError("patient-profile update_routine", error: error)
+            throw error
         } catch {
             print("Supabase update_routine error: \(error)")
             throw error
@@ -693,6 +769,10 @@ enum DrugInfo: DrugInfoProvider {
             )
         }
 
+        if let patientId, !patientId.isEmpty {
+            return PatientRequestContext(patientId: patientId, deviceToken: nil)
+        }
+
         if let activePatientID = supabase.activePatientID {
             return PatientRequestContext(
                 patientId: activePatientID.uuidString.lowercased(),
@@ -700,11 +780,25 @@ enum DrugInfo: DrugInfoProvider {
             )
         }
 
-        let resolvedPatientId = patientId ?? supabase.authenticatedUserID?.uuidString.lowercased()
+        let resolvedPatientId = supabase.authenticatedUserID?.uuidString.lowercased()
         return PatientRequestContext(patientId: resolvedPatientId, deviceToken: nil)
     }
 
     #if DEBUG
+    private static func logProfileFunctionError(_ name: String, error: FunctionsError) {
+        switch error {
+        case let .httpError(code, data):
+            let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
+            print("DEBUG_PROFILE_FUNCTION_ERROR \(name): status=\(code), body=\(body)")
+        case .relayError:
+            print("DEBUG_PROFILE_FUNCTION_ERROR \(name): relayError")
+        }
+    }
+
+    private static func logProfileOwner(action: String, context: PatientRequestContext) {
+        print("DEBUG_PROFILE \(action): patientId=\(context.patientId ?? "nil"), deviceTokenPresent=\(context.deviceToken?.isEmpty == false), resolvedContext=\(String(describing: SupabaseManager.shared.resolveActiveCareContext()))")
+    }
+
     private static func logSafetyRequest(patientId: String?, deviceToken: String?, medications: [SafetyMedicationInput], lang: String) {
         let meds = medications.map {
             RedactedSafetyMedication(
@@ -734,5 +828,10 @@ enum DrugInfo: DrugInfoProvider {
             print("check-interactions response JSON: \(json)")
         }
     }
+    #endif
+
+    #if !DEBUG
+    private static func logProfileOwner(action: String, context: PatientRequestContext) {}
+    private static func logProfileFunctionError(_ name: String, error: FunctionsError) {}
     #endif
 }

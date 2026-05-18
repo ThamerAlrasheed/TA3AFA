@@ -14,11 +14,10 @@ struct LinkedDevicesView: View {
         List {
             if isLoading && devices.isEmpty {
                 Section {
-                    HStack {
-                        Spacer()
-                        ProgressView("Loading devices...")
-                        Spacer()
-                    }
+                    BrandedLoadingView(
+                        message: LoadingMessage.custom("Loading devices…", "جاري تحميل الأجهزة…").text,
+                        style: .inline
+                    )
                 }
             } else if let error = errorMessage {
                 Section {

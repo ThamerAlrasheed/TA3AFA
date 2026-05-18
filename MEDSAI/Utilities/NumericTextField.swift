@@ -11,7 +11,13 @@ struct NumericTextField: UIViewRepresentable {
         let tf = UITextField()
         tf.keyboardType = allowsDecimal ? .decimalPad : .numberPad
         tf.placeholder = placeholder
-        tf.borderStyle = .roundedRect
+        tf.borderStyle = .none
+        tf.backgroundColor = .clear
+        tf.textColor = .label
+        tf.tintColor = UIColor(Color.istsehGreen)
+        tf.font = .preferredFont(forTextStyle: .body)
+        tf.textAlignment = ISTSEHLayout.isArabic ? .right : .left
+        tf.semanticContentAttribute = ISTSEHLayout.isArabic ? .forceRightToLeft : .forceLeftToRight
         tf.delegate = context.coordinator
         tf.addTarget(context.coordinator, action: #selector(Coordinator.editingChanged(_:)), for: .editingChanged)
         context.coordinator.updateTextField(tf, from: value)
@@ -21,6 +27,8 @@ struct NumericTextField: UIViewRepresentable {
     func updateUIView(_ uiView: UITextField, context: Context) {
         context.coordinator.maxFractionDigits = maxFractionDigits
         context.coordinator.allowsDecimal = allowsDecimal
+        uiView.textAlignment = ISTSEHLayout.isArabic ? .right : .left
+        uiView.semanticContentAttribute = ISTSEHLayout.isArabic ? .forceRightToLeft : .forceLeftToRight
         context.coordinator.updateTextField(uiView, from: value)
     }
 

@@ -1,5 +1,6 @@
 import SwiftUI
 import Supabase
+import UserNotifications
 
 struct SignUpPageView: View {
     private struct UserProfileUpsertPayload: Encodable {
@@ -7,270 +8,370 @@ struct SignUpPageView: View {
         let email: String
         let first_name: String
         let last_name: String
-        let phone_number: String
         let date_of_birth: String
-        let allergies: [String]
-        let conditions: [String]
+        let role: String
     }
 
-    // Flow steps
-    enum Step: Int { case account = 0, identity = 1, health = 2 }
+    private enum Step: Int, CaseIterable {
+        case welcome
+        case account
+        case profile
+        case routine
+        case medical
+        case notifications
+        case preview
+    }
 
     @EnvironmentObject var settings: AppSettings
-    @Environment(\.dismiss) private var dismiss
-    @State private var step: Step = .account
+    @State private var step: Step = .welcome
 
-    // Step 1 — account
     @State private var email = ""
     @State private var password = ""
     @State private var confirmPassword = ""
-    @FocusState private var focusAccount: AccountField?
-    enum AccountField { case email, password, confirm }
+    @FocusState private var accountFocus: AccountField?
+    private enum AccountField { case email, password, confirm }
 
-    // Step 2 — identity
     @State private var firstName = ""
     @State private var lastName = ""
-    @State private var phoneNumber = ""
-    @FocusState private var focusIdentity: IdentityField?
-    enum IdentityField { case first, last, phone }
+    @State private var dateOfBirth = Calendar.current.date(byAdding: .year, value: -30, to: Date()) ?? Date()
+    @FocusState private var profileFocus: ProfileField?
+    private enum ProfileField { case first, last }
 
-    // Step 3 — health
-    @State private var dateOfBirth: Date = Calendar.current.date(byAdding: .year, value: -20, to: Date()) ?? Date()
+    @State private var breakfast = Self.date(hour: 8)
+    @State private var lunch = Self.date(hour: 13)
+    @State private var dinner = Self.date(hour: 19)
+    @State private var bedtime = Self.date(hour: 23)
+    @State private var wakeup = Self.date(hour: 7)
+
     @State private var allergyList: [String] = []
     @State private var conditionList: [String] = []
+    @State private var pendingCustomAllergy = ""
+    @State private var pendingCustomCondition = ""
 
-    // UX
+    @State private var wantsNotifications = true
+    @State private var notificationPermissionMessage: String?
     @State private var busy = false
     @State private var errorText: String?
+    @State private var stepValidationMessage: String?
+    #if DEBUG
+    @State private var signupTrace: [String] = []
+    #endif
 
     private var supabase: SupabaseManager { .shared }
 
-    // MARK: - Validators
     private var emailValid: Bool {
-        let e = email.trimmingCharacters(in: .whitespacesAndNewlines)
         let pattern = #"^[A-Z0-9a-z._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"#
-        return e.range(of: pattern, options: .regularExpression) != nil
+        return email.trimmingCharacters(in: .whitespacesAndNewlines).range(of: pattern, options: .regularExpression) != nil
     }
-    private var strongPassword: Bool {
-        guard password.count >= 8 else { return false }
-        let up = password.range(of: #".*[A-Z].*"#, options: .regularExpression) != nil
-        let lo = password.range(of: #".*[a-z].*"#, options: .regularExpression) != nil
-        let di = password.range(of: #".*\d.*"#,   options: .regularExpression) != nil
-        return up && lo && di
-    }
-    private var passwordsMatch: Bool { confirmPassword.isEmpty || password == confirmPassword }
 
-    private var canNextFromAccount: Bool { emailValid && strongPassword && password == confirmPassword }
-    private var canNextFromIdentity: Bool {
-        !lastName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private var strongPassword: Bool {
+        password.count >= 6
     }
-    private var canFinish: Bool { true }
+
+    private var canContinue: Bool {
+        !busy
+    }
+
+    private var validationHint: String? {
+        stepValidationMessage
+    }
 
     var body: some View {
         ZStack {
-                ScrollView {
-                    VStack(spacing: 20) {
-                        header
-                        ProgressView(value: Double(step.rawValue + 1), total: 3)
-                            .tint(Color(.systemGreen))
-                            .padding(.bottom, 4)
+            Color.istsehPageBackground.ignoresSafeArea()
 
-                        Group {
-                            switch step {
-                            case .account: accountCard
-                            case .identity: identityCard
-                            case .health: healthCard
-                            }
-                        }
-                        .animation(.easeInOut, value: step)
+            ScrollView {
+                VStack(spacing: 20) {
+                    header
+                    progressBar
+                    currentStepView
 
-                        if let err = errorText {
-                            Text(err)
-                                .font(.footnote)
-                                .foregroundStyle(.red)
-                                .multilineTextAlignment(.center)
-                                .padding(.horizontal)
-                        }
-
-                        controls
-                        Spacer(minLength: 10)
+                    if let errorText {
+                        Text(errorText)
+                            .font(.footnote.weight(.medium))
+                            .foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 20)
+                        #if DEBUG
+                        signupTraceView
+                        #endif
                     }
-                    .padding(.top, 20)
-                }
 
-                if busy {
-                    Color.black.opacity(0.12).ignoresSafeArea()
-                    ProgressView(step == .health ? "Creating account…" : "Checking…")
-                        .padding()
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                    OnboardingFooter(
+                        backTitle: MedicalProfileText.back,
+                        primaryTitle: step == .preview ? MedicalProfileText.finishSetup : MedicalProfileText.continueText,
+                        skipTitle: step == .medical || step == .notifications ? MedicalProfileText.skipForNow : nil,
+                        validationHint: validationHint,
+                        canContinue: canContinue && !busy,
+                        showsBack: step != .welcome,
+                        isBusy: busy,
+                        onBack: goBack,
+                        onPrimary: { Task { await advance() } },
+                        onSkip: { Task { await skipOptionalStep() } }
+                    )
                 }
+                .padding(.horizontal, 20)
+                .padding(.top, 22)
+                .padding(.bottom, 34)
             }
+
+            if busy {
+                Color.black.opacity(0.18).ignoresSafeArea()
+                BrandedLoadingView(
+                    message: MedicalProfileText.isArabic ? "جاري إنشاء الحساب…" : "Creating account…",
+                    style: .card
+                )
+                .padding(.horizontal, 28)
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Text("ISTSEH").font(.headline.bold())
+                Text("ISTSEH")
+                    .font(.headline.bold())
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .environment(\.layoutDirection, MedicalProfileText.isArabic ? .rightToLeft : .leftToRight)
     }
 
-    // MARK: - Header
     private var header: some View {
         VStack(spacing: 12) {
-            Image(systemName: "pills.fill")
-                .resizable().scaledToFit()
-                .frame(width: 90, height: 90)
-                .foregroundStyle(.green)
-            Text(step == .account ? "Create your account" :
-                 step == .identity ? "Tell us about you" :
-                 "Health details")
-            .font(.system(size: 28, weight: .bold, design: .rounded))
-            .multilineTextAlignment(.center)
-            .frame(maxWidth: .infinity)
-            .padding(.horizontal)
+            ZStack {
+                Circle()
+                    .fill(Color.istsehGreenSoft)
+                    .frame(width: 76, height: 76)
+                Image(systemName: stepIcon)
+                    .font(.system(size: 32, weight: .semibold))
+                    .foregroundStyle(Color.istsehGreen)
+            }
+
+            Text(stepTitle)
+                .font(.system(size: 30, weight: .bold, design: .rounded))
+                .multilineTextAlignment(.center)
+                .foregroundStyle(.primary)
+
+            Text(stepSubtitle)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineSpacing(3)
         }
     }
 
-    // MARK: - Step 1 UI
-    private var accountCard: some View {
-        VStack(spacing: 10) {
-            InputRow(systemImage: "envelope", placeholder: "Email", text: $email, isSecure: false, isFocused: focusAccount == .email)
-                .focused($focusAccount, equals: .email)
-                .textContentType(.emailAddress)
-                .keyboardType(.emailAddress)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            if !email.isEmpty && !emailValid { InlineError("Please enter a valid email.") }
-
-            InputRow(systemImage: "lock", placeholder: "Password (≥8, upper, lower, number)", text: $password, isSecure: true, isFocused: focusAccount == .password)
-                .focused($focusAccount, equals: .password)
-                .textContentType(.newPassword)
-            if !password.isEmpty && !strongPassword {
-                InlineError("Password must be at least 8 characters and include upper, lower, and a number.")
-            }
-
-            InputRow(systemImage: "lock.rotation", placeholder: "Confirm password", text: $confirmPassword, isSecure: true, isFocused: focusAccount == .confirm)
-                .focused($focusAccount, equals: .confirm)
-            if !confirmPassword.isEmpty && !passwordsMatch { InlineError("Passwords don't match.") }
+    private var progressBar: some View {
+        VStack(spacing: 8) {
+            ProgressView(value: Double(step.rawValue + 1), total: Double(Step.allCases.count))
+                .tint(Color.istsehGreen)
+            Text("\(step.rawValue + 1) / \(Step.allCases.count)")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
         }
-        .cardStyle()
     }
 
-    // MARK: - Step 2 UI
-    private var identityCard: some View {
-        VStack(spacing: 12) {
-            HStack(spacing: 10) {
-                InputRow(systemImage: "person", placeholder: "First name", text: $firstName, isSecure: false, isFocused: focusIdentity == .first)
-                    .focused($focusIdentity, equals: .first)
-                    .textContentType(.givenName)
-                InputRow(systemImage: "person.fill", placeholder: "Last name", text: $lastName, isSecure: false, isFocused: focusIdentity == .last)
-                    .focused($focusIdentity, equals: .last)
-                    .textContentType(.familyName)
-            }
-            InputRow(systemImage: "phone", placeholder: "Phone number (optional)", text: $phoneNumber, isSecure: false, isFocused: focusIdentity == .phone)
-                .focused($focusIdentity, equals: .phone)
-                .textContentType(.telephoneNumber)
-                .keyboardType(.phonePad)
-        }
-        .cardStyle()
-    }
-
-    // MARK: - Step 3 UI
-    private var healthCard: some View {
-        VStack(spacing: 14) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Date of birth").font(.subheadline).foregroundStyle(.secondary)
-                HStack(spacing: 12) {
-                    Image(systemName: "calendar").imageScale(.medium).foregroundStyle(.secondary)
-                    DatePicker("Date of birth", selection: $dateOfBirth, in: ...Date(), displayedComponents: .date)
-                        .labelsHidden()
-                }
-                .fieldContainer()
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                MultiSelectorView(
-                    title: "Allergies",
-                    presets: ["Peanuts", "Milk", "Eggs", "Tree Nuts", "Soy", "Wheat", "Fish", "Shellfish", "Penicillin", "Aspirin", "Ibuprofen", "Latex"],
-                    selectedItems: $allergyList
-                )
-            }
-
-            VStack(alignment: .leading, spacing: 6) {
-                MultiSelectorView(
-                    title: "Chronic Conditions",
-                    presets: ["Diabetes", "Hypertension", "Asthma", "Arthritis", "CKD", "COPD", "Heart Disease", "Anxiety", "Depression"],
-                    selectedItems: $conditionList
-                )
-            }
-        }
-        .cardStyle()
-    }
-
-    // MARK: - Controls
-    private var controls: some View {
-        HStack {
-            if step != .account {
-                Button("Back") {
-                    withAnimation { step = Step(rawValue: step.rawValue - 1) ?? .account }
-                }
-                .buttonStyle(.bordered)
-            }
-            Spacer()
-            if step == .health {
-                Button(busy ? "Saving…" : "Create account") { Task { await finish() } }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color(.systemGreen))
-                    .disabled(busy || !canFinish)
-            } else {
-                Button(busy ? "Checking…" : "Next") { Task { await next() } }
-                    .buttonStyle(.borderedProminent)
-                    .tint(Color(.systemGreen))
-                    .disabled(busy ||
-                              (step == .account && !canNextFromAccount) ||
-                              (step == .identity && !canNextFromIdentity))
-            }
-        }
-        .padding(.horizontal)
-        .padding(.bottom, 8)
-    }
-
-    // MARK: - Flow logic
-
-    private func next() async {
-        errorText = nil
+    @ViewBuilder
+    private var currentStepView: some View {
         switch step {
+        case .welcome:
+            welcomeCard
         case .account:
-            // Simple client-side validation only; Supabase will reject duplicate emails at signup time.
-            guard canNextFromAccount else { return }
-            withAnimation { step = .identity }
-        case .identity:
-            withAnimation { step = .health }
-        case .health:
-            break
+            accountCard
+        case .profile:
+            profileCard
+        case .routine:
+            routineCard
+        case .medical:
+            VStack(spacing: 16) {
+                AllergySelectionSection(selectedItems: $allergyList, pendingCustomText: $pendingCustomAllergy)
+                ConditionSelectionSection(selectedItems: $conditionList, pendingCustomText: $pendingCustomCondition)
+            }
+        case .notifications:
+            notificationsCard
+        case .preview:
+            PremiumTeaserView()
         }
     }
 
-    /// Final step: create Supabase Auth user, then write profile to Postgres.
+    private var welcomeCard: some View {
+        ISTSEHCard {
+            VStack(alignment: MedicalProfileText.isArabic ? .trailing : .leading, spacing: 14) {
+                Label(MedicalProfileText.careTitle, systemImage: "sparkles")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(Color.istsehGreen)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                Text(MedicalProfileText.careSubtitle)
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(3)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+    }
+
+    private var accountCard: some View {
+        ISTSEHCard {
+            VStack(spacing: 12) {
+                OnboardingField(systemImage: "envelope", placeholder: copy("Email", "البريد الإلكتروني"), text: $email, isSecure: false)
+                    .focused($accountFocus, equals: .email)
+                    .keyboardType(.emailAddress)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                OnboardingField(systemImage: "lock", placeholder: copy("Password", "كلمة المرور"), text: $password, isSecure: true)
+                    .focused($accountFocus, equals: .password)
+                    .textContentType(.newPassword)
+                OnboardingField(systemImage: "lock.rotation", placeholder: copy("Confirm password", "تأكيد كلمة المرور"), text: $confirmPassword, isSecure: true)
+                    .focused($accountFocus, equals: .confirm)
+            }
+        }
+    }
+
+    private var profileCard: some View {
+        ISTSEHCard {
+            VStack(spacing: 12) {
+                OnboardingField(systemImage: "person", placeholder: copy("First name", "الاسم الأول"), text: $firstName, isSecure: false)
+                    .focused($profileFocus, equals: .first)
+                OnboardingField(systemImage: "person.fill", placeholder: copy("Last name", "اسم العائلة"), text: $lastName, isSecure: false)
+                    .focused($profileFocus, equals: .last)
+
+                DatePicker(copy("Date of birth", "تاريخ الميلاد"), selection: $dateOfBirth, in: ...Date(), displayedComponents: .date)
+                    .tint(Color.istsehGreen)
+                    .padding(.top, 4)
+            }
+        }
+    }
+
+    private var routineCard: some View {
+        ISTSEHCard {
+            VStack(spacing: 12) {
+                Text(MedicalProfileText.dailyRoutine)
+                    .font(.headline.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                RoutineTimeRow(title: copy("Wake up", "الاستيقاظ"), date: $wakeup, image: "sunrise.fill")
+                RoutineTimeRow(title: copy("Breakfast", "الفطور"), date: $breakfast, image: "cup.and.saucer.fill")
+                RoutineTimeRow(title: copy("Lunch", "الغداء"), date: $lunch, image: "fork.knife")
+                RoutineTimeRow(title: copy("Dinner", "العشاء"), date: $dinner, image: "fork.knife.circle.fill")
+                RoutineTimeRow(title: copy("Bedtime", "وقت النوم"), date: $bedtime, image: "moon.fill")
+            }
+        }
+    }
+
+    private var notificationsCard: some View {
+        ISTSEHCard {
+            VStack(alignment: .center, spacing: 16) {
+                ZStack {
+                    Circle()
+                        .fill(Color.istsehGreenSoft)
+                        .frame(width: 64, height: 64)
+                    Image(systemName: "bell.badge.fill")
+                        .font(.system(size: 28, weight: .semibold))
+                        .foregroundStyle(Color.istsehGreen)
+                }
+
+                Text(copy(
+                    "Medication reminders work best when notifications are enabled. You can change this later in Settings.",
+                    "تعمل تذكيرات الأدوية بشكل أفضل عند تفعيل الإشعارات. يمكنك تغيير ذلك لاحقًا من الإعدادات."
+                ))
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .lineSpacing(3)
+
+                Button {
+                    Task { await requestNotificationPermission() }
+                } label: {
+                    Label(copy("Enable Notifications", "تفعيل الإشعارات"), systemImage: "bell.fill")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 50)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(Color.istsehGreen)
+
+                if let notificationPermissionMessage {
+                    Text(notificationPermissionMessage)
+                        .font(.footnote.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+            }
+        }
+    }
+
+    private func goBack() {
+        withAnimation(.easeInOut) {
+            step = Step(rawValue: step.rawValue - 1) ?? .welcome
+        }
+    }
+
+    private func advance() async {
+        errorText = nil
+        stepValidationMessage = nil
+        guard validateCurrentStep() else { return }
+        if step == .preview {
+            await finish()
+            return
+        }
+        withAnimation(.easeInOut) {
+            step = Step(rawValue: step.rawValue + 1) ?? .preview
+        }
+    }
+
+    private func requestNotificationPermission() async {
+        let granted = await NotificationsManager.shared.requestAuthorization()
+        wantsNotifications = granted
+        notificationPermissionMessage = granted
+            ? copy("Notifications are enabled.", "تم تفعيل الإشعارات.")
+            : copy("Notifications are off. You can continue and enable them later in Settings.", "الإشعارات غير مفعلة. يمكنك المتابعة وتفعيلها لاحقًا من الإعدادات.")
+    }
+
+    private func skipOptionalStep() async {
+        guard step == .medical || step == .notifications else { return }
+        if step == .notifications {
+            wantsNotifications = false
+        }
+        await advance()
+    }
+
     private func finish() async {
-        guard canFinish else { return }
+        guard validateAllSteps() else { return }
         busy = true
         defer { busy = false }
 
         let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        resetSignupTrace()
+        appendSignupTrace("final_setup started step=\(step.rawValue + 1)/\(Step.allCases.count)")
+        appendSignupTrace("validation passed authUidPresent=\(supabase.client.auth.currentSession?.user.id != nil)")
+        appendSignupTrace("payload summary: emailPresent=\(!trimmedEmail.isEmpty), firstNamePresent=\(!firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty), lastNamePresent=\(!lastName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty), dobFormat=yyyy-MM-dd, language=\(UserDefaults.standard.string(forKey: "appearance.language") ?? "nil"), appearance=\(UserDefaults.standard.string(forKey: "appearanceMode") ?? "nil"), activePatientID=\(settings.activePatientID ?? "nil"), careCodeActive=\(supabase.isPatientMode), allergiesCount=\(allergyList.count), conditionsCount=\(conditionList.count), routineFields=5")
 
         do {
-            // 1) Create Auth user via Supabase
-            let authResponse = try await supabase.client.auth.signUp(
-                email: trimmedEmail,
-                password: password
-            )
-
-            guard let userId = authResponse.session?.user.id else {
-                errorText = "Account created but session unavailable. Please log in."
+            let userId: UUID
+            if let existingUserID = supabase.client.auth.currentSession?.user.id {
+                userId = existingUserID
+                appendSignupTrace("auth retry using existing session uid=\(existingUserID.uuidString.lowercased())")
+            } else {
+                appendSignupTrace("auth signup started payloadKeys=[email,password]")
+                let authResponse = try await runBackendStep("auth.signUp") {
+                    try await supabase.client.auth.signUp(email: trimmedEmail, password: password)
+                }
+                guard let createdUserID = authResponse.session?.user.id else {
+                    appendSignupTrace("auth signup returned no session; email confirmation may be required")
+                    errorText = copy("Account created. Please log in to continue.", "تم إنشاء الحساب. الرجاء تسجيل الدخول للمتابعة.")
+                    return
+                }
+                userId = createdUserID
+                appendSignupTrace("auth signup success uid=\(createdUserID.uuidString.lowercased())")
+            }
+            guard supabase.client.auth.currentSession?.user.id != nil else {
+                appendSignupTrace("auth uid missing after signup/retry")
+                errorText = copy("Account created. Please log in to continue.", "تم إنشاء الحساب. الرجاء تسجيل الدخول للمتابعة.")
                 return
             }
+            await MainActor.run {
+                settings.prepareForAuthenticatedSession()
+            }
+            appendSignupTrace("local session context cleared activePatientID=\(settings.activePatientID ?? "nil"), careCodeActive=\(supabase.isPatientMode)")
 
-            // 3) Insert profile into the users table
             let isoFormatter = ISO8601DateFormatter()
             isoFormatter.formatOptions = [.withFullDate]
 
@@ -279,93 +380,490 @@ struct SignUpPageView: View {
                 email: trimmedEmail,
                 first_name: firstName.trimmingCharacters(in: .whitespacesAndNewlines),
                 last_name: lastName.trimmingCharacters(in: .whitespacesAndNewlines),
-                phone_number: phoneNumber.trimmingCharacters(in: .whitespacesAndNewlines),
                 date_of_birth: isoFormatter.string(from: dateOfBirth),
-                allergies: allergyList,
-                conditions: conditionList
+                role: UserRole.regular.rawValue
             )
 
-            try await supabase.client
-                .from("users")
-                .upsert(profile)
-                .execute()
-
-            // 4) Update app state so RootView transitions to the main app
-            await MainActor.run {
-                settings.didChooseEntry = true
-                settings.onboardingCompleted = true
+            appendSignupTrace("users.upsert started uid=\(userId.uuidString.lowercased()) payloadKeys=[id,email,first_name,last_name,date_of_birth,role]")
+            _ = try await runBackendStep("users.upsert") {
+                try await supabase.client.from("users").upsert(profile).execute()
             }
-            await settings.loadRoutineFromSupabase()
+
+            let patientId = userId.uuidString.lowercased()
+            try await syncOnboardingMedicalDetails(patientId: patientId)
+
+            appendSignupTrace("navigation/bootstrap started")
+            await settings.bootstrapAuthenticatedSession()
+            appendSignupTrace("navigation/bootstrap success")
         } catch {
-            errorText = "Couldn't create account: \(error.localizedDescription)"
+            appendSignupTrace("final_setup failed error=\(sanitize(error))")
+            if isDuplicateEmailError(error) {
+                errorText = copy("This email is already in use.", "هذا البريد الإلكتروني مستخدم بالفعل.")
+                return
+            }
+            errorText = copy(
+                "We couldn’t finish setting up your account. Please try again.",
+                "تعذر إكمال إعداد حسابك. يرجى المحاولة مرة أخرى."
+            )
         }
     }
+
+    private func validateCurrentStep() -> Bool {
+        if let message = validationMessage(for: step) {
+            stepValidationMessage = message
+            focusFirstInvalidField(for: step)
+            return false
+        }
+        return true
+    }
+
+    private func validateAllSteps() -> Bool {
+        for candidate in Step.allCases {
+            if let message = validationMessage(for: candidate) {
+                step = candidate
+                stepValidationMessage = message
+                focusFirstInvalidField(for: candidate)
+                return false
+            }
+        }
+        return true
+    }
+
+    private func validationMessage(for candidate: Step) -> String? {
+        switch candidate {
+        case .welcome, .notifications, .preview:
+            return nil
+        case .account:
+            let trimmedEmail = email.trimmingCharacters(in: .whitespacesAndNewlines)
+            if trimmedEmail.isEmpty {
+                return copy("Please enter your email.", "يرجى إدخال البريد الإلكتروني.")
+            }
+            if !emailValid {
+                return copy("Please enter a valid email address.", "يرجى إدخال بريد إلكتروني صحيح.")
+            }
+            if password.isEmpty {
+                return copy("Please enter your password.", "يرجى إدخال كلمة المرور.")
+            }
+            if password.count < 6 {
+                return copy("Password must be at least 6 characters.", "يجب أن تكون كلمة المرور ٦ أحرف على الأقل.")
+            }
+            if confirmPassword.isEmpty {
+                return copy("Please confirm your password.", "يرجى تأكيد كلمة المرور.")
+            }
+            if password != confirmPassword {
+                return copy("Passwords do not match.", "كلمتا المرور غير متطابقتين.")
+            }
+            return nil
+        case .profile:
+            if firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return copy("Please enter your first name.", "يرجى إدخال الاسم الأول.")
+            }
+            if lastName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return copy("Please enter your last name.", "يرجى إدخال اسم العائلة.")
+            }
+            if dateOfBirth > Date() {
+                return copy("Please enter a valid date of birth.", "يرجى إدخال تاريخ ميلاد صحيح.")
+            }
+            return nil
+        case .routine:
+            let times = [wakeup, breakfast, lunch, dinner, bedtime]
+            let allTimesValid = times.allSatisfy { date in
+                let comps = Calendar.current.dateComponents([.hour, .minute], from: date)
+                return comps.hour != nil && comps.minute != nil
+            }
+            if !allTimesValid || timeString(from: wakeup) == timeString(from: bedtime) {
+                return copy("Please complete your daily routine times.", "يرجى إكمال أوقات الروتين اليومي.")
+            }
+            return nil
+        case .medical:
+            if !pendingCustomAllergy.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return copy("Tap Add to save the custom allergy or clear the field.", "اضغط إضافة لحفظ الحساسية المخصصة أو امسح الحقل.")
+            }
+            if !pendingCustomCondition.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return copy("Tap Add to save the custom condition or clear the field.", "اضغط إضافة لحفظ المرض المزمن المخصص أو امسح الحقل.")
+            }
+            return nil
+        }
+    }
+
+    private func focusFirstInvalidField(for candidate: Step) {
+        switch candidate {
+        case .account:
+            if email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !emailValid {
+                accountFocus = .email
+            } else if password.isEmpty || password.count < 6 {
+                accountFocus = .password
+            } else if confirmPassword.isEmpty || password != confirmPassword {
+                accountFocus = .confirm
+            }
+        case .profile:
+            if firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                profileFocus = .first
+            } else if lastName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                profileFocus = .last
+            }
+        default:
+            break
+        }
+    }
+
+    private func runBackendStep<T>(_ name: String, operation: () async throws -> T) async throws -> T {
+        do {
+            let result = try await operation()
+            appendSignupTrace("\(name) success")
+            return result
+        } catch {
+            appendSignupTrace("\(name) failed \(sanitize(error))")
+            throw error
+        }
+    }
+
+    private func syncOnboardingMedicalDetails(patientId: String) async throws {
+        let routinePayload: [String: String] = [
+            "breakfast_time": timeString(from: breakfast),
+            "lunch_time": timeString(from: lunch),
+            "dinner_time": timeString(from: dinner),
+            "bedtime": timeString(from: bedtime),
+            "wakeup_time": timeString(from: wakeup)
+        ]
+        appendSignupTrace("users.update_routine started patientId=\(patientId), payloadKeys=[breakfast_time,lunch_time,dinner_time,bedtime,wakeup_time], valueTypes=String(HH:mm:ss)")
+        _ = try await runBackendStep("users.update_routine") {
+            try await supabase.client
+                .from("users")
+                .update(routinePayload)
+                .eq("id", value: patientId)
+                .execute()
+        }
+
+        appendSignupTrace("patient-profile allergies started count=\(allergyList.count), payloadKeys=[action,patient_id,allergy(name,severity,reaction,notes,is_active)]")
+        for name in allergyList.map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }) where !name.isEmpty {
+            try await runBackendStep("patient-profile.save_allergy") {
+                try await DrugInfo.saveAllergy(patientId: patientId, allergy: Allergy(name: name))
+            }
+        }
+        appendSignupTrace("patient-profile allergies complete")
+
+        appendSignupTrace("patient-profile conditions started count=\(conditionList.count), payloadKeys=[action,patient_id,condition(name,status,diagnosed_at,notes,is_active)]")
+        for name in conditionList.map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }) where !name.isEmpty {
+            try await runBackendStep("patient-profile.save_condition") {
+                try await DrugInfo.saveCondition(patientId: patientId, condition: Condition(name: name))
+            }
+        }
+        appendSignupTrace("patient-profile conditions complete")
+    }
+
+    private func sanitize(_ error: Error) -> String {
+        if let functionsError = error as? FunctionsError {
+            switch functionsError {
+            case let .httpError(code, data):
+                let body = String(data: data, encoding: .utf8) ?? "<non-utf8 body>"
+                return "httpError(status=\(code), body=\(body))"
+            case .relayError:
+                return "relayError"
+            }
+        }
+        return String(describing: error)
+            .replacingOccurrences(of: SupabaseManager.shared.supabaseKey, with: "[redacted-key]")
+    }
+
+    private func resetSignupTrace() {
+        #if DEBUG
+        signupTrace = []
+        #endif
+    }
+
+    private func appendSignupTrace(_ message: String) {
+        #if DEBUG
+        let line = "DEBUG_SIGNUP \(message)"
+        signupTrace.append(line)
+        print(line)
+        #endif
+    }
+
+    private func isDuplicateEmailError(_ error: Error) -> Bool {
+        let message = String(describing: error).lowercased()
+        return message.contains("already") || message.contains("registered") || message.contains("duplicate")
+    }
+
+    private var stepTitle: String {
+        switch step {
+        case .welcome: return MedicalProfileText.careTitle
+        case .account: return copy("Create your account", "إنشاء حسابك")
+        case .profile: return copy("Tell us about you", "أخبرنا عنك")
+        case .routine: return MedicalProfileText.dailyRoutine
+        case .medical: return MedicalProfileText.medicalProfile
+        case .notifications: return MedicalProfileText.notifications
+        case .preview: return MedicalProfileText.premiumTitle
+        }
+    }
+
+    private var stepSubtitle: String {
+        switch step {
+        case .welcome: return MedicalProfileText.careSubtitle
+        case .account: return copy("Use an email and password to keep your care plan synced.", "استخدم البريد الإلكتروني وكلمة المرور لمزامنة خطة رعايتك.")
+        case .profile: return copy("Basic details help personalize your medication schedule.", "تساعد البيانات الأساسية في تخصيص جدول أدويتك.")
+        case .routine: return copy("ISTSEH uses your day to place reminders at better times.", "يستخدم استصح روتينك لاختيار أوقات تذكير أنسب.")
+        case .medical: return copy("Keep this simple. Select what applies or add your own.", "اجعلها بسيطة. اختر ما ينطبق أو أضف عنصرًا مخصصًا.")
+        case .notifications: return copy("We will only use reminders for care-related alerts.", "سنستخدم الإشعارات للتذكيرات المتعلقة بالرعاية فقط.")
+        case .preview: return MedicalProfileText.premiumSubtitle
+        }
+    }
+
+    private var stepIcon: String {
+        switch step {
+        case .welcome: return "cross.case.fill"
+        case .account: return "person.badge.plus.fill"
+        case .profile: return "person.text.rectangle.fill"
+        case .routine: return "clock.fill"
+        case .medical: return "heart.text.clipboard.fill"
+        case .notifications: return "bell.badge.fill"
+        case .preview: return "sparkles"
+        }
+    }
+
+    private func copy(_ english: String, _ arabic: String) -> String {
+        MedicalProfileText.isArabic ? arabic : english
+    }
+
+    private func timeString(from date: Date) -> String {
+        let components = Calendar.current.dateComponents([.hour, .minute], from: date)
+        return String(format: "%02d:%02d:00", components.hour ?? 0, components.minute ?? 0)
+    }
+
+    private static func date(hour: Int, minute: Int = 0) -> Date {
+        Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: Date()) ?? Date()
+    }
+
+    #if DEBUG
+    private var signupTraceView: some View {
+        DisclosureGroup("DEBUG Signup Trace") {
+            VStack(alignment: .leading, spacing: 6) {
+                if signupTrace.isEmpty {
+                    Text("No trace yet")
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(signupTrace.enumerated()), id: \.offset) { _, line in
+                        Text(line)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .padding(.top, 6)
+        }
+        .font(.caption.weight(.semibold))
+        .padding(12)
+        .background(Color.istsehCard)
+        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(Color.istsehCardStroke, lineWidth: 1)
+        )
+        .padding(.horizontal, 4)
+    }
+    #endif
 }
 
-// MARK: - Reusable UI bits
-
-private struct InputRow: View {
+private struct OnboardingField: View {
     let systemImage: String
     let placeholder: String
     @Binding var text: String
     let isSecure: Bool
-    let isFocused: Bool
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: systemImage)
-                .imageScale(.medium)
-                .foregroundStyle(.secondary)
+            if !MedicalProfileText.isArabic {
+                icon
+            }
             if isSecure {
                 SecureField(placeholder, text: $text)
+                    .multilineTextAlignment(MedicalProfileText.isArabic ? .trailing : .leading)
             } else {
                 TextField(placeholder, text: $text)
-                    .textInputAutocapitalization(.never)
+                    .textInputAutocapitalization(.words)
                     .autocorrectionDisabled()
+                    .multilineTextAlignment(MedicalProfileText.isArabic ? .trailing : .leading)
+            }
+            if MedicalProfileText.isArabic {
+                icon
             }
         }
-        .fieldContainer(highlighted: isFocused)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 13)
+        .background(Color.istsehPageBackground.opacity(0.55))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .stroke(Color.istsehCardStroke, lineWidth: 1)
+        )
+    }
+
+    private var icon: some View {
+        Image(systemName: systemImage)
+            .foregroundStyle(Color.istsehGreen)
+            .frame(width: 22)
     }
 }
 
-private struct InlineError: View {
-    let message: String
-    init(_ m: String) { message = m }
+private struct OnboardingFooter: View {
+    let backTitle: String
+    let primaryTitle: String
+    let skipTitle: String?
+    let validationHint: String?
+    let canContinue: Bool
+    let showsBack: Bool
+    let isBusy: Bool
+    let onBack: () -> Void
+    let onPrimary: () -> Void
+    let onSkip: () -> Void
+
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "exclamationmark.triangle.fill").imageScale(.small)
-            Text(message)
+        VStack(spacing: 12) {
+            if let validationHint, !isBusy {
+                Text(validationHint)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, alignment: .center)
+            }
+
+            HStack(spacing: 12) {
+                if showsBack {
+                    Button(backTitle, action: onBack)
+                        .font(.headline)
+                        .frame(width: 104, height: 52)
+                        .background(Color.istsehGreenSoft)
+                        .foregroundStyle(Color.istsehGreen)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                }
+
+                Button(action: onPrimary) {
+                    Text(primaryTitle)
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 52)
+                }
+                .background(canContinue ? Color.istsehGreen : Color.istsehGreen.opacity(0.35))
+                .foregroundStyle(.white)
+                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .disabled(!canContinue || isBusy)
+            }
+
+            if let skipTitle {
+                Button(skipTitle, action: onSkip)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Color.istsehGreen)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .disabled(isBusy)
+            }
         }
-        .font(.footnote)
-        .foregroundStyle(.red)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 4)
+        .frame(maxWidth: .infinity)
+        .environment(\.layoutDirection, .leftToRight)
     }
 }
 
-private extension View {
-    func cardStyle() -> some View {
-        self
-            .padding(18)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-            )
-            .padding(.horizontal)
+private struct RoutineTimeRow: View {
+    let title: String
+    @Binding var date: Date
+    let image: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if MedicalProfileText.isArabic {
+                timePicker
+                Spacer(minLength: 12)
+                label
+                icon
+            } else {
+                icon
+                label
+                Spacer(minLength: 12)
+                timePicker
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color.istsehPageBackground.opacity(0.46))
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.istsehCardStroke, lineWidth: 1)
+        )
     }
-    func fieldContainer(highlighted: Bool = false) -> some View {
-        self
-            .padding(.horizontal, 14)
-            .padding(.vertical, 12)
-            .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(Color(.secondarySystemBackground))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .strokeBorder(highlighted ? Color.green : Color.primary.opacity(0.08),
-                                  lineWidth: highlighted ? 1.5 : 1)
-            )
+
+    private var icon: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color.istsehGreenSoft)
+                .frame(width: 38, height: 38)
+            Image(systemName: image)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Color.istsehGreen)
+        }
+    }
+
+    private var label: some View {
+        Text(title)
+            .font(.headline)
+            .foregroundStyle(.primary)
+            .lineLimit(1)
+            .frame(minWidth: 88, alignment: MedicalProfileText.isArabic ? .trailing : .leading)
+    }
+
+    private var timePicker: some View {
+        DatePicker("", selection: $date, displayedComponents: .hourAndMinute)
+            .labelsHidden()
+            .tint(Color.istsehGreen)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 6)
+            .background(Color.istsehCard)
+            .clipShape(Capsule())
+    }
+}
+
+struct PremiumTeaserView: View {
+    var body: some View {
+        ISTSEHCard {
+            VStack(alignment: .center, spacing: 14) {
+                Label(MedicalProfileText.comingLater, systemImage: "sparkles")
+                    .font(.headline.weight(.bold))
+                    .foregroundStyle(Color.istsehGreen)
+                Text(MedicalProfileText.premiumTitle)
+                    .font(.title3.weight(.bold))
+                    .multilineTextAlignment(.center)
+                Text(MedicalProfileText.premiumSubtitle)
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .lineSpacing(3)
+                VStack(alignment: .center, spacing: 10) {
+                    PremiumBenefit(title: MedicalProfileText.isArabic ? "تنبيهات عائلية متقدمة" : "Advanced family alerts")
+                    PremiumBenefit(title: MedicalProfileText.isArabic ? "دعم إعادة صرف الدواء" : "Refill support")
+                    PremiumBenefit(title: MedicalProfileText.isArabic ? "تقارير سلامة أعمق" : "Deeper safety reports")
+                    PremiumBenefit(title: MedicalProfileText.isArabic ? "إدارة أكثر من عائلة" : "Manage more than one family")
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+        }
+    }
+}
+
+private struct PremiumBenefit: View {
+    let title: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .foregroundStyle(Color.istsehGreen)
+            Text(title)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(.center)
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .environment(\.layoutDirection, MedicalProfileText.isArabic ? .rightToLeft : .leftToRight)
     }
 }

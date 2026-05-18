@@ -1,14 +1,10 @@
 import Foundation
 import SwiftUI
 import Combine
+import UserNotifications
 
 enum UserRole: String, Codable {
     case regular, caregiver, patient
-}
-
-extension Color {
-    static let istsehGreen = Color(red: 0.13, green: 0.72, blue: 0.36)
-    static let istsehGreenSoft = Color.istsehGreen.opacity(0.14)
 }
 
 final class AppSettings: ObservableObject {
@@ -74,6 +70,9 @@ final class AppSettings: ObservableObject {
     }
     @Published var appearanceMode: AppearanceMode
     @Published var sessionRevokedMessage: String? = nil
+    @Published var isProfileLoading = false
+    @Published var profileLoadError: String? = nil
+    @Published var loadedProfileUserID: UUID? = nil
 
     enum RoutineSaveStatus { case idle, saving, saved, failed }
     @Published var routineSaveStatus: RoutineSaveStatus = .idle
@@ -174,11 +173,69 @@ final class AppSettings: ObservableObject {
     }
 
     @MainActor
+    func prepareForAuthenticatedSession() {
+        let previousContext = supabase.resolveActiveCareContext()
+        resetUserScopedState()
+        supabase.clearCareCodeSession()
+        supabase.clearStoredCareContext()
+        activePatientID = nil
+        activePatientName = nil
+        role = .regular
+        debugSessionLog("prepareForAuthenticatedSession", previousContext: previousContext)
+    }
+
+    @MainActor
+    func bootstrapAuthenticatedSession() async {
+        prepareForAuthenticatedSession()
+        didChooseEntry = true
+        onboardingCompleted = true
+        await loadCurrentUserProfile()
+        await loadRoutineFromSupabase()
+    }
+
+    @MainActor
+    func signOutCompletely() async {
+        let previousContext = supabase.resolveActiveCareContext()
+        UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
+        try? await supabase.client.auth.signOut()
+        PatientSessionStore.shared.clearAllSessionValuesBestEffort()
+        resetUserScopedState()
+        activePatientID = nil
+        activePatientName = nil
+        role = .regular
+        try? PatientSessionStore.shared.clearUserRole()
+        didChooseEntry = false
+        onboardingCompleted = false
+        debugSessionLog("signOutCompletely", previousContext: previousContext)
+    }
+
+    @MainActor
+    func resetUserScopedState() {
+        firstName = ""
+        lastName = ""
+        dateOfBirth = nil
+        familyMembers = []
+        loadedProfileUserID = nil
+        profileLoadError = nil
+        isProfileLoading = false
+
+        let defaults = UserDefaults.standard
+        [
+            "profile.firstName",
+            "profile.lastName",
+            "profile.dob",
+            "completedDoseKeys",
+            "completedAppointments"
+        ].forEach { defaults.removeObject(forKey: $0) }
+    }
+
+    @MainActor
     func forceDisconnectPatient() {
         // Clear session
         PatientSessionStore.shared.clearAllSessionValuesBestEffort()
         
         // Reset local state to landing
+        resetUserScopedState()
         role = .regular
         didChooseEntry = false
         // activePatientID and activePatientName are updated via didSet on role or manually
@@ -209,6 +266,54 @@ final class AppSettings: ObservableObject {
     }
 
     // MARK: - Supabase sync
+
+    @MainActor
+    func loadCurrentUserProfile() async {
+        guard let uid = supabase.authenticatedUserID else {
+            loadedProfileUserID = nil
+            return
+        }
+
+        isProfileLoading = true
+        profileLoadError = nil
+        let requestedUserID = uid
+
+        do {
+            struct UserProfileRow: Decodable {
+                let first_name: String?
+                let last_name: String?
+                let date_of_birth: String?
+                let role: String?
+            }
+
+            let rows: [UserProfileRow] = try await supabase.retry {
+                try await self.supabase.client
+                    .from("users")
+                    .select("first_name, last_name, date_of_birth, role")
+                    .eq("id", value: uid.uuidString.lowercased())
+                    .limit(1)
+                    .execute()
+                    .value
+            }
+
+            guard supabase.authenticatedUserID == requestedUserID else { return }
+            let row = rows.first
+            firstName = row?.first_name ?? ""
+            lastName = row?.last_name ?? ""
+            dateOfBirth = parseProfileDate(row?.date_of_birth)
+            if let rawRole = row?.role, activePatientID == nil {
+                role = UserRole(rawValue: rawRole) ?? .regular
+            }
+            loadedProfileUserID = uid
+            isProfileLoading = false
+            debugSessionLog("loadCurrentUserProfile")
+        } catch {
+            guard supabase.authenticatedUserID == requestedUserID else { return }
+            profileLoadError = error.localizedDescription
+            isProfileLoading = false
+            debugSessionLog("loadCurrentUserProfile failed")
+        }
+    }
 
     /// Call after sign-in (or app start if already signed in) to pull routine from Postgres.
     @MainActor
@@ -283,6 +388,7 @@ final class AppSettings: ObservableObject {
 
             if let fn = row.first_name { firstName = fn }
             if let ln = row.last_name  { lastName = ln }
+            loadedProfileUserID = uid
 
             // Only update role if we are NOT currently acting as a patient
             if let r = row.role, !wasActingAtRequestStart, supabase.activePatientID == nil {
@@ -371,4 +477,25 @@ final class AppSettings: ObservableObject {
         let m = comps.minute ?? 0
         return String(format: "%02d:%02d:00", h, m)
     }
+
+    private func parseProfileDate(_ value: String?) -> Date? {
+        guard let value, !value.isEmpty else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate]
+        return formatter.date(from: value)
+    }
+
+    #if DEBUG
+    func debugSessionLog(_ event: String, previousContext: ActiveCareContext? = nil) {
+        let authID = supabase.authenticatedUserID?.uuidString.lowercased() ?? "nil"
+        let email = supabase.client.auth.currentSession?.user.email ?? "nil"
+        let activePatient = activePatientID ?? "nil"
+        let patientSession = supabase.patientUserID?.uuidString.lowercased() ?? "nil"
+        let hasDeviceToken = supabase.patientDeviceToken?.isEmpty == false
+        let profileID = loadedProfileUserID?.uuidString.lowercased() ?? "nil"
+        print("DEBUG_SESSION \(event): auth.uid=\(authID), email=\(email), profileID=\(profileID), role=\(role.rawValue), activePatientID=\(activePatient), activePatientName=\(activePatientName ?? "nil"), careCodePatientID=\(patientSession), careCodeTokenPresent=\(hasDeviceToken), previousContext=\(String(describing: previousContext)), resolvedContext=\(String(describing: supabase.resolveActiveCareContext()))")
+    }
+    #else
+    func debugSessionLog(_ event: String, previousContext: ActiveCareContext? = nil) {}
+    #endif
 }

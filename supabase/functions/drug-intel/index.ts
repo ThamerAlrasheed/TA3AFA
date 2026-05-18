@@ -14,9 +14,11 @@ import {
   saveSourceCache,
   getAISummaryCache,
   saveAISummaryCache,
+  normalizeDrugSummary,
+  sanitizePatientText,
 } from "../_shared/drug-utils.ts";
 
-const PROMPT_VERSION = "v3-hardened";
+const PROMPT_VERSION = "v4-normalized";
 const MODEL = "gpt-4o-mini";
 
 Deno.serve(async (req) => {
@@ -75,8 +77,9 @@ Deno.serve(async (req) => {
         sources.push({ name: "Internal Cache", fetched_at: cachedSummary.generated_at });
       }
 
+      const normalizedCachedSummary = normalizeDrugSummary(cachedSummary.summary);
       return jsonResponse({
-        ...cachedSummary.summary,
+        ...normalizedCachedSummary,
         rxcui,
         is_ai_generated: true,
         model: cachedSummary.model,
@@ -98,20 +101,25 @@ Deno.serve(async (req) => {
       if (cached) {
         sourceCacheIds.push(cached.id);
         sources.push({ name: sourceName, url: cached.response.url, fetched_at: cached.fetched_at });
-        return cached.response.text;
+        return sanitizePatientText(cached.response.text);
       }
 
       const fresh = await fetchFn(rxcui);
       if (fresh) {
+        const cleanFresh = {
+          ...fresh,
+          text: sanitizePatientText(fresh.text),
+          normalized_version: "patient-label-v1"
+        };
         const id = await saveSourceCache(admin, {
           source: sourceName,
           query_type: queryType,
           query_key: rxcui,
-          response: fresh
+          response: cleanFresh
         });
         if (id) sourceCacheIds.push(id);
-        sources.push({ name: sourceName, url: fresh.url, fetched_at: new Date().toISOString() });
-        return fresh.text;
+        sources.push({ name: sourceName, url: cleanFresh.url, fetched_at: new Date().toISOString() });
+        return cleanFresh.text;
       }
       return "";
     };
@@ -162,7 +170,7 @@ ${medlineText || "NOT FOUND"}
       try {
         const parsed = JSON.parse(raw);
         if (validateDrugSummary(parsed)) {
-          summary = parsed;
+          summary = normalizeDrugSummary(parsed);
         } else {
           console.warn(`Validation failed for ${trimmedName} (Attempt ${attempts})`);
         }

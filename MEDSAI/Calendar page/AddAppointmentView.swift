@@ -65,7 +65,7 @@ struct AddAppointmentView: View {
                             }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
-                            .background(Color.green.opacity(0.15))
+                            .background(Color.istsehGreenSoft)
                             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                         }
                         .menuIndicator(.hidden)
@@ -84,7 +84,10 @@ struct AddAppointmentView: View {
                 } header: {
                     Text("Details")
                 }
+                .listRowBackground(Color.istsehCard)
             }
+            .scrollContentBackground(.hidden)
+            .background(Color.istsehPageBackground.ignoresSafeArea())
             .navigationTitle(existing == nil ? "New Appointment" : "Edit Appointment")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

@@ -26,7 +26,7 @@ struct MedScanConfirmationView: View {
         let top = scanResult.candidates.first
         _selectedCandidate = State(initialValue: top)
         _manualName = State(initialValue: top?.name ?? "")
-        _manualStrength = State(initialValue: top?.strength ?? "")
+        _manualStrength = State(initialValue: top?.strength.flatMap(MedicationStrengthFormatter.displayableStrength) ?? "")
         _manualDosageForm = State(initialValue: top?.dosage_form ?? "")
     }
 
@@ -57,7 +57,7 @@ struct MedScanConfirmationView: View {
                         .padding(.top, 4)
                     }
                     .padding()
-                    .background(Color(.systemGray6))
+                    .background(Color.istsehCard)
                     .cornerRadius(12)
                     .padding(.horizontal)
                 } else {
@@ -76,7 +76,7 @@ struct MedScanConfirmationView: View {
                         }
                     }
                     .padding()
-                    .background(Color(.systemGray6))
+                    .background(Color.istsehCard)
                     .cornerRadius(12)
                     .padding(.horizontal)
                 }
@@ -125,13 +125,13 @@ struct MedScanConfirmationView: View {
         Button {
             selectedCandidate = candidate
             manualName = candidate.name
-            manualStrength = candidate.strength ?? ""
+            manualStrength = candidate.strength.flatMap(MedicationStrengthFormatter.displayableStrength) ?? ""
             manualDosageForm = candidate.dosage_form ?? ""
         } label: {
             HStack {
                 VStack(alignment: .leading) {
                     Text(candidate.name).bold()
-                    if let strength = candidate.strength {
+                    if let strength = candidate.strength.flatMap(MedicationStrengthFormatter.displayableStrength) {
                         Text(strength).font(.caption).foregroundColor(.secondary)
                     }
                 }
@@ -162,7 +162,8 @@ struct MedScanConfirmationView: View {
         Task {
             do {
                 // Now we fetch the full clinical safety data from drug-intel
-                let payload = try await DrugInfo.fetchDetails(name: finalName, lang: "English")
+                let fetchedPayload = try await DrugInfo.fetchDetails(name: finalName, lang: "English")
+                let payload = fetchedPayload.normalizedForPatientDisplay(fallbackTitle: finalName)
                 
                 await MainActor.run {
                     isFetchingIntel = false

@@ -146,15 +146,7 @@ struct LoginPageView: View {
                 email: emailTrimmed,
                 password: password
             )
-            
-            // Update app state
-            await MainActor.run {
-                settings.didChooseEntry = true
-                settings.onboardingCompleted = true
-            }
-            
-            // Load user routine from Postgres
-            await settings.loadRoutineFromSupabase()
+            await settings.bootstrapAuthenticatedSession()
         } catch {
             await MainActor.run {
                 alertMessage = error.localizedDescription

@@ -100,6 +100,12 @@ struct CareCodeEntryView: View {
         
         Task {
             do {
+                try? await SupabaseManager.shared.client.auth.signOut()
+                await MainActor.run {
+                    settings.resetUserScopedState()
+                    settings.stopActingAsPatient()
+                }
+
                 let result = try await SupabaseManager.shared.redeemCareCode(code)
 
                 try PatientSessionStore.shared.savePatientSession(

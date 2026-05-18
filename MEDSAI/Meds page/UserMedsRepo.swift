@@ -8,7 +8,68 @@ final class UserMedsRepo: ObservableObject {
     private struct UserMedicationUpsertPayload: Encodable {
         let id: String
         let user_id: String
-        let medication_id: String
+        let medication_id: String?
+        let dosage: String
+        let frequency_per_day: Int
+        let frequency_hours: Int?
+        let food_rule: String
+        let dosage_times: [String]?
+        let is_prn: Bool
+        let is_manual: Bool
+        let is_manual_schedule: Bool
+        let medication_name: String
+        let source_type: String
+        let medication_form: String?
+        let strength_value: Double?
+        let strength_unit: String?
+        let dose_amount: Double?
+        let dose_amount_unit: String?
+        let dose_quantity: Double?
+        let dose_unit: String?
+        let dose_quantity_unit: String?
+        let strength_amount: Double?
+        let parsed_strength_unit: String?
+        let concentration_amount: Double?
+        let concentration_unit: String?
+        let route: String?
+        let application_area: String?
+        let dose_display: String?
+        let food_rule_source: String?
+        let dose_details_source: String?
+        let is_dose_auto_filled: Bool
+        let dose_details_confirmed_by_user: Bool
+        let schedule_mode: String
+        let times_per_day: Int?
+        let times_per_week: Int?
+        let selected_weekdays: [Int]?
+        let interval_days: Int?
+        let reminders_enabled: Bool
+        let caregiver_reminders_enabled: Bool?
+        let visual_shape: String?
+        let visual_color: String?
+        let visual_background_color: String?
+        let refill_reminder_enabled: Bool
+        let refill_current_supply: Double?
+        let refill_supply_unit: String?
+        let refill_threshold_quantity: Double?
+        let refill_estimated_runout_date: String?
+        let refill_reminder_date: String?
+        let refill_reminder_mode: String?
+        let refill_notes: String?
+        let custom_form_text: String?
+        let custom_unit_text: String?
+        let source_metadata: String?
+        let start_date: String
+        let end_date: String
+        let notes: String?
+        let is_active: Bool
+    }
+
+    private struct LegacyUserMedicationUpsertPayload: Encodable {
+        let id: String
+        let user_id: String
+        let medication_id: String?
+        let name: String
         let dosage: String
         let frequency_per_day: Int
         let frequency_hours: Int?
@@ -43,7 +104,12 @@ final class UserMedsRepo: ObservableObject {
 
     init() {
         NotificationCenter.default.publisher(for: NSNotification.Name("SupabaseContextChanged"))
-            .sink { [weak self] _ in Task { await self?.fetchMeds() } }
+            .sink { [weak self] _ in
+                Task {
+                    await self?.fetchMeds()
+                    self?.refreshAllReminders()
+                }
+            }
             .store(in: &cancellables)
 
         NotificationCenter.default.publisher(for: NSNotification.Name("UserRoutineChanged"))
@@ -64,7 +130,7 @@ final class UserMedsRepo: ObservableObject {
     func fetchMeds() async {
         guard let uid = supabase.currentUserID else { return }
         let uidString = uid.uuidString.lowercased()
-        isLoading = true; errorMessage = nil
+        isLoading = true; errorMessage = nil; meds = []
         do {
             if supabase.isPatientMode || supabase.activePatientID != nil {
                 let context = try await self.supabase.fetchPatientMedicationContext()
@@ -73,8 +139,12 @@ final class UserMedsRepo: ObservableObject {
                 self.notifyMeds = context.notifyMeds
                 self.notifyAppointments = context.notifyAppointments
                 let loadedMeds = context.medications.compactMap { LocalMed(row: $0) }
+                #if DEBUG
+                debugMedicationLoad(rows: context.medications, loadedMeds: loadedMeds, source: "patient-medications")
+                #endif
                 self.meds = loadedMeds
                 isLoading = false
+                loadedMeds.forEach { NotificationsManager.shared.updateReminders(for: $0) }
                 await refreshSafetyWarnings(for: loadedMeds)
                 return
             }
@@ -125,7 +195,11 @@ final class UserMedsRepo: ObservableObject {
                     .value
             }
             let loadedMeds = rows.compactMap { LocalMed(row: $0) }
+            #if DEBUG
+            debugMedicationLoad(rows: rows, loadedMeds: loadedMeds, source: "user_medications")
+            #endif
             self.meds = loadedMeds
+            loadedMeds.forEach { NotificationsManager.shared.updateReminders(for: $0) }
             await refreshSafetyWarnings(for: loadedMeds)
         } catch {
             print("⚠️ fetchMeds failed for \(uidString):", error)
@@ -213,26 +287,35 @@ final class UserMedsRepo: ObservableObject {
         guard let uid = supabase.currentUserID else { return }
         let uidString = uid.uuidString.lowercased()
 
+        #if DEBUG
+        debugMedicationSaveStarted(med, ownerID: uidString, endpoint: supabase.isPatientMode || supabase.activePatientID != nil ? "patient-medications" : "user_medications")
+        #endif
+
         if supabase.isPatientMode || supabase.activePatientID != nil {
             do {
                 try await supabase.savePatientMedication(med)
                 await fetchMeds()
+                #if DEBUG
+                debugMedicationRefreshStatus(errorMessage)
+                #endif
+                NotificationsManager.shared.updateReminders(for: med)
             } catch {
+                #if DEBUG
+                debugMedicationSaveFailure(med, ownerID: supabase.currentUserID?.uuidString.lowercased() ?? "unknown", table: "patient-medications", error: "\(error)")
+                #else
                 print("⚠️ patient add med failed:", error)
-                errorMessage = error.localizedDescription
+                #endif
+                errorMessage = localizedMedicationSaveError()
             }
             return
         }
         
-        // 1. Ensure we have a medication_id to link to
+        // Identified meds stay linked to catalog. Manual meds intentionally save without
+        // medication_id so they are not blocked by catalog lookup/upsert failures.
         var finalMedId = med.catalogId
-        
-        // 1.1 Improved Link Logic: Search by name if ID is missing or if we want to be safe
-        if finalMedId == nil {
+
+        if med.sourceType == .identified && finalMedId == nil {
             do {
-                // Try to find or create in catalog
-                // We'll use a placeholder DrugPayload if we don't have one, 
-                // but usually the UI provides it from the search result.
                 let dummyPayload = DrugPayload(
                     title: med.name,
                     strengths: [],
@@ -257,44 +340,165 @@ final class UserMedsRepo: ObservableObject {
                 print("⚠️ Failed to auto-catalog med: \(error)")
             }
         }
-        
-        guard let medIdToLink = finalMedId else {
-            errorMessage = "Medication '\(med.name)' could not be found or created in the catalog."
+
+        if med.sourceType == .identified && finalMedId == nil {
+            errorMessage = localizedMedicationSaveError()
+            #if DEBUG
+            debugMedicationSaveFailure(med, ownerID: uidString, table: "user_medications", error: "identified medication missing catalog id")
+            #endif
             return
         }
 
-        do {
-            let isoFmt = ISO8601DateFormatter()
-            isoFmt.formatOptions = [.withFullDate]
+        let isoFmt = ISO8601DateFormatter()
+        isoFmt.formatOptions = [.withFullDate]
 
-            let row = UserMedicationUpsertPayload(
-                id: med.id,
-                user_id: uidString,
-                medication_id: medIdToLink,
-                dosage: med.dosage,
-                frequency_per_day: med.frequencyPerDay,
-                frequency_hours: med.minIntervalHours,
-                food_rule: med.foodRule.rawValue,
-                dosage_times: med.dosageTimes.isEmpty ? nil : med.dosageTimes,
-                is_prn: med.asNeeded,
-                is_manual_schedule: med.isManualSchedule,
-                start_date: isoFmt.string(from: med.startDate),
-                end_date: isoFmt.string(from: med.endDate),
-                notes: normalizedNotes(med.notes),
-                is_active: true
-            )
+        do {
+            let row = userMedicationPayload(for: med, ownerID: uidString, medicationID: finalMedId, formatter: isoFmt)
 
             try await supabase.client
                 .from("user_medications")
                 .upsert(row)
                 .execute()
 
+            #if DEBUG
+            print("✅ Medication save succeeded table=user_medications status=success responseBody=nil")
+            #endif
+
             NotificationsManager.shared.updateReminders(for: med)
             await fetchMeds()
+            #if DEBUG
+            debugMedicationRefreshStatus(errorMessage)
+            #endif
         } catch {
+            if shouldRetryLegacyMedicationSave(error) {
+                do {
+                    #if DEBUG
+                    debugMedicationSaveFailure(med, ownerID: uidString, table: "user_medications", error: "full payload failed; retrying legacy payload: \(error)")
+                    #endif
+                    let legacyRow = legacyUserMedicationPayload(for: med, ownerID: uidString, medicationID: finalMedId, formatter: isoFmt)
+                    try await supabase.client
+                        .from("user_medications")
+                        .upsert(legacyRow)
+                        .execute()
+                    #if DEBUG
+                    print("✅ Medication legacy save succeeded table=user_medications status=success responseBody=nil")
+                    #endif
+                    NotificationsManager.shared.updateReminders(for: med)
+                    await fetchMeds()
+                    #if DEBUG
+                    debugMedicationRefreshStatus(errorMessage)
+                    #endif
+                    return
+                } catch {
+                    #if DEBUG
+                    debugMedicationSaveFailure(med, ownerID: uidString, table: "user_medications", error: "legacy payload failed: \(error)")
+                    #else
+                    print("⚠️ add med failed:", error)
+                    #endif
+                    errorMessage = localizedMedicationSaveError()
+                    return
+                }
+            }
+
+            #if DEBUG
+            debugMedicationSaveFailure(med, ownerID: uidString, table: "user_medications", error: "\(error)")
+            #else
             print("⚠️ add med failed:", error)
-            errorMessage = error.localizedDescription
+            #endif
+            errorMessage = localizedMedicationSaveError()
         }
+    }
+
+    private func userMedicationPayload(
+        for med: LocalMed,
+        ownerID uidString: String,
+        medicationID finalMedId: String?,
+        formatter isoFmt: ISO8601DateFormatter
+    ) -> UserMedicationUpsertPayload {
+        UserMedicationUpsertPayload(
+                id: med.id,
+                user_id: uidString,
+                medication_id: finalMedId,
+                dosage: med.dosage,
+                frequency_per_day: med.frequencyPerDay,
+                frequency_hours: med.minIntervalHours,
+                food_rule: med.foodRule.rawValue,
+                dosage_times: med.dosageTimes.isEmpty ? nil : med.dosageTimes,
+                is_prn: med.asNeeded,
+                is_manual: med.sourceType == .manual,
+                is_manual_schedule: med.isManualSchedule,
+                medication_name: med.name,
+                source_type: med.sourceType.rawValue,
+                medication_form: med.medicationForm,
+                strength_value: med.strengthValue,
+                strength_unit: med.strengthUnit,
+                dose_amount: med.doseAmount,
+                dose_amount_unit: med.doseAmountUnit,
+                dose_quantity: med.doseQuantity,
+                dose_unit: med.doseUnit,
+                dose_quantity_unit: med.doseQuantityUnit,
+                strength_amount: med.strengthAmount,
+                parsed_strength_unit: med.parsedStrengthUnit,
+                concentration_amount: med.concentrationAmount,
+                concentration_unit: med.concentrationUnit,
+                route: med.route,
+                application_area: med.applicationArea,
+                dose_display: med.doseDisplay,
+                food_rule_source: med.foodRuleSource,
+                dose_details_source: med.doseDetailsSource,
+                is_dose_auto_filled: med.isDoseAutoFilled,
+                dose_details_confirmed_by_user: med.doseDetailsConfirmedByUser,
+                schedule_mode: med.scheduleMode.storageValue,
+                times_per_day: med.timesPerDay,
+                times_per_week: med.timesPerWeek,
+                selected_weekdays: med.selectedWeekdays.isEmpty ? nil : med.selectedWeekdays,
+                interval_days: med.intervalDays,
+                reminders_enabled: med.remindersEnabled,
+                caregiver_reminders_enabled: med.caregiverRemindersEnabled,
+                visual_shape: med.visualShape,
+                visual_color: med.visualColor,
+                visual_background_color: med.visualBackgroundColor,
+                refill_reminder_enabled: med.refillReminderEnabled,
+                refill_current_supply: med.refillCurrentSupply,
+                refill_supply_unit: med.refillSupplyUnit,
+                refill_threshold_quantity: med.refillThresholdQuantity,
+                refill_estimated_runout_date: dateOnlyString(med.refillEstimatedRunoutDate),
+                refill_reminder_date: dateTimeString(med.refillReminderDate),
+                refill_reminder_mode: med.refillReminderMode,
+                refill_notes: normalizedNotes(med.refillNotes),
+                custom_form_text: med.customFormText,
+                custom_unit_text: med.customUnitText,
+                source_metadata: med.sourceMetadata,
+                start_date: isoFmt.string(from: med.startDate),
+                end_date: isoFmt.string(from: med.endDate),
+                notes: normalizedNotes(med.notes),
+                is_active: true
+            )
+    }
+
+    private func legacyUserMedicationPayload(
+        for med: LocalMed,
+        ownerID uidString: String,
+        medicationID finalMedId: String?,
+        formatter isoFmt: ISO8601DateFormatter
+    ) -> LegacyUserMedicationUpsertPayload {
+        LegacyUserMedicationUpsertPayload(
+            id: med.id,
+            user_id: uidString,
+            medication_id: finalMedId,
+            name: med.name,
+            dosage: med.dosage,
+            frequency_per_day: med.frequencyPerDay,
+            frequency_hours: med.minIntervalHours,
+            food_rule: legacyFoodRuleStorage(med.foodRule),
+            dosage_times: med.dosageTimes.isEmpty ? nil : med.dosageTimes,
+            is_prn: med.asNeeded,
+            is_manual_schedule: med.isManualSchedule,
+            start_date: isoFmt.string(from: med.startDate),
+            end_date: isoFmt.string(from: med.endDate),
+            notes: normalizedNotes(med.notes),
+            is_active: true
+        )
     }
 
     func update(_ med: LocalMed) async { await add(med) }
@@ -305,6 +509,7 @@ final class UserMedsRepo: ObservableObject {
             if supabase.isPatientMode || supabase.activePatientID != nil {
                 try await supabase.deletePatientMedication(id: med.id)
                 await fetchMeds()
+                NotificationsManager.shared.cancelReminders(for: med.id)
                 return
             }
 
@@ -330,6 +535,11 @@ final class UserMedsRepo: ObservableObject {
             if supabase.isPatientMode || supabase.activePatientID != nil {
                 try await supabase.archivePatientMedication(id: med.id, archived: archived)
                 await fetchMeds()
+                if archived {
+                    NotificationsManager.shared.cancelReminders(for: med.id)
+                } else {
+                    NotificationsManager.shared.updateReminders(for: med)
+                }
                 return
             }
 
@@ -395,6 +605,192 @@ final class UserMedsRepo: ObservableObject {
         let trimmed = notes.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
+
+    private func dateOnlyString(_ date: Date?) -> String? {
+        guard let date else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate]
+        return formatter.string(from: date)
+    }
+
+    private func dateTimeString(_ date: Date?) -> String? {
+        guard let date else { return nil }
+        return ISO8601DateFormatter().string(from: date)
+    }
+
+    private func shouldRetryLegacyMedicationSave(_ error: Error) -> Bool {
+        let text = "\(error)".lowercased()
+        return text.contains("schema cache")
+            || text.contains("pgrst")
+            || text.contains("column")
+            || text.contains("could not find")
+            || text.contains("source_metadata")
+            || text.contains("refill_")
+            || text.contains("dose_details")
+            || text.contains("dose_amount")
+            || text.contains("concentration_")
+            || text.contains("medication_name")
+            || text.contains("source_type")
+            || text.contains("is_manual")
+            || text.contains("food_rule_enum")
+            || text.contains("invalid input value for enum")
+    }
+
+    private func legacyFoodRuleStorage(_ rule: FoodRule) -> String {
+        switch rule {
+        case .beforeFood: return "beforeFood"
+        case .withFood: return "withFood"
+        case .afterFood: return "afterFood"
+        case .none, .avoidWithFood, .notSure: return "none"
+        }
+    }
+
+    private func localizedMedicationSaveError() -> String {
+        UserDefaults.standard.string(forKey: "appearance.language") == "ar"
+            ? "تعذر حفظ الدواء. يرجى المحاولة مرة أخرى."
+            : "Couldn’t save the medication. Please try again."
+    }
+
+    #if DEBUG
+    private func debugMedicationSaveStarted(_ med: LocalMed, ownerID: String, endpoint: String) {
+        print(debugMedicationLines(
+            title: "Medication save started",
+            med: med,
+            ownerID: ownerID,
+            endpoint: endpoint,
+            status: nil,
+            responseBody: nil
+        ).joined(separator: "\n"))
+    }
+
+    private func debugMedicationSaveFailure(_ med: LocalMed, ownerID: String, table: String, error: String) {
+        print(debugMedicationLines(
+            title: "Medication save failed",
+            med: med,
+            ownerID: ownerID,
+            endpoint: table,
+            status: "unavailable",
+            responseBody: error
+        ).joined(separator: "\n"))
+    }
+
+    private func debugMedicationRefreshStatus(_ error: String?) {
+        let lines = [
+            "Medication local refresh finished",
+            "finalLocalRefreshStatus: \(error == nil ? "success" : "failed")",
+            "refreshError: \(error ?? "nil")",
+            "loadedMedicationCount: \(meds.count)"
+        ]
+        print(lines.joined(separator: "\n"))
+    }
+
+    private func debugMedicationLoad(rows: [LocalMed.DBRow], loadedMeds: [LocalMed], source: String) {
+        let missingMedicationID = rows.filter { $0.medication_id == nil }.count
+        let missingVisualFields = rows.filter {
+            $0.visual_shape == nil || $0.visual_color == nil || $0.visual_background_color == nil
+        }.count
+        let missingRefillFields = rows.filter { $0.refill_reminder_enabled == nil }.count
+        let missingScheduleMode = rows.filter { $0.schedule_mode == nil }.count
+        let mappedModes = loadedMeds.map {
+            "\($0.name)=\($0.scheduleMode.storageValue) weekdays=\($0.selectedWeekdays) visual=(\($0.visualShape ?? "nil"),\($0.visualColor ?? "nil"),\($0.visualBackgroundColor ?? "nil")) visualFallback=\($0.visualShape == nil || $0.visualColor == nil || $0.visualBackgroundColor == nil) refill=(enabled:\($0.refillReminderEnabled),mode:\($0.refillReminderMode ?? "nil"),supply:\($0.refillCurrentSupply != nil),threshold:\($0.refillThresholdQuantity != nil),date:\($0.refillReminderDate != nil))"
+        }
+        print("""
+        Medication load/decode
+        source: \(source)
+        recordCount: \(rows.count)
+        loadedCount: \(loadedMeds.count)
+        decodeFailures: \(rows.count - loadedMeds.count)
+        recordsMissingMedicationId: \(missingMedicationID)
+        recordsMissingVisualFields: \(missingVisualFields)
+        recordsMissingRefillFields: \(missingRefillFields)
+        recordsMissingScheduleMode: \(missingScheduleMode)
+        decoded visual/refill fields on Meds load: \(mappedModes)
+        """)
+    }
+
+    private func debugMedicationLines(
+        title: String,
+        med: LocalMed,
+        ownerID: String,
+        endpoint: String,
+        status: String?,
+        responseBody: String?
+    ) -> [String] {
+        let medicationNamePresent = !med.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let strengthText = "\(med.strengthValue.map { String($0) } ?? "nil") \(med.strengthUnit ?? "nil")"
+        let doseText = "\(med.doseQuantity.map { String($0) } ?? "nil") \(med.doseUnit ?? "nil")"
+        var lines: [String] = []
+        lines.append(title)
+        lines.append("selectedContext: \(debugSelectedContext())")
+        lines.append("auth.uid: \(supabase.authenticatedUserID?.uuidString.lowercased() ?? "nil")")
+        lines.append("activePatientID: \(supabase.activePatientID?.uuidString.lowercased() ?? "nil")")
+        lines.append("careCodeActive: \(supabase.isPatientMode)")
+        lines.append("ownerID: \(ownerID)")
+        lines.append("medicationNamePresent: \(medicationNamePresent)")
+        lines.append("medicationIdPresent: \(med.catalogId != nil)")
+        lines.append("medicationId: \(med.catalogId ?? "nil")")
+        lines.append("isManual: \(med.sourceType == .manual)")
+        lines.append("sourceType: \(med.sourceType.rawValue)")
+        lines.append("medicationForm: \(med.medicationForm ?? "nil")")
+        lines.append("strength: \(strengthText)")
+        lines.append("dose: \(doseText)")
+        lines.append("doseDisplay: \(med.doseDisplay ?? "nil")")
+        lines.append("doseDetailsSource: \(med.doseDetailsSource ?? "nil") autoFilled=\(med.isDoseAutoFilled) confirmed=\(med.doseDetailsConfirmedByUser)")
+        lines.append("scheduleMode: \(med.scheduleMode.storageValue)")
+        lines.append("selectedWeekdays: \(med.selectedWeekdays)")
+        lines.append("isPRN/asNeeded: \(med.asNeeded || med.scheduleMode.isPRN)")
+        lines.append("doseTimes: \(med.dosageTimes)")
+        lines.append("doseTimesCount: \(med.dosageTimes.count)")
+        lines.append("foodRule: \(med.foodRule.rawValue)")
+        lines.append("startDate: \(debugDate(med.startDate))")
+        lines.append("endDatePresent: true")
+        lines.append("remindersEnabled: \(med.remindersEnabled)")
+        lines.append("visualShape: \(med.visualShape ?? "nil")")
+        lines.append("visualColor: \(med.visualColor ?? "nil")")
+        lines.append("visualBackgroundColor: \(med.visualBackgroundColor ?? "nil")")
+        lines.append("visualFieldsPresent: \(med.visualShape != nil && med.visualColor != nil && med.visualBackgroundColor != nil)")
+        lines.append("refill_enabled: \(med.refillReminderEnabled)")
+        lines.append("refill_current_supply present: \(med.refillCurrentSupply != nil)")
+        lines.append("refill_threshold present: \(med.refillThresholdQuantity != nil)")
+        lines.append("refill_reminder_mode: \(med.refillReminderMode ?? "nil")")
+        lines.append("refill_reminder_date present: \(med.refillReminderDate != nil)")
+        lines.append("payloadKeys: \(debugPayloadKeys(for: endpoint))")
+        lines.append("endpoint/table/EdgeFunction: \(endpoint)")
+        if let status {
+            lines.append("httpStatusCode: \(status)")
+        }
+        if let responseBody {
+            lines.append("decodedResponseBody: \(responseBody)")
+        }
+        return lines
+    }
+
+    private func debugSelectedContext() -> String {
+        switch supabase.resolveActiveCareContext() {
+        case let .selfUser(userId):
+            return "self user \(userId.uuidString.lowercased())"
+        case let .managedPatient(patientId, caregiverUserId):
+            return "managed patient \(patientId.uuidString.lowercased()) caregiver \(caregiverUserId.uuidString.lowercased())"
+        case let .linkedPatient(patientId, _):
+            return "linked patient \(patientId.uuidString.lowercased())"
+        case .none:
+            return "none"
+        }
+    }
+
+    private func debugPayloadKeys(for endpoint: String) -> String {
+        if endpoint == "patient-medications" {
+            return "action,device_token,target_patient_id,medication(id,medication_id,name,dosage,frequency_per_day,frequency_hours,dosage_times,is_prn,is_manual,is_manual_schedule,medication_name,source_type,medication_form,strength_value,strength_unit,dose_amount,dose_amount_unit,dose_quantity,dose_unit,dose_quantity_unit,strength_amount,parsed_strength_unit,concentration_amount,concentration_unit,route,application_area,dose_display,food_rule_source,dose_details_source,is_dose_auto_filled,dose_details_confirmed_by_user,schedule_mode,times_per_day,times_per_week,selected_weekdays,interval_days,reminders_enabled,caregiver_reminders_enabled,visual_shape,visual_color,visual_background_color,refill_reminder_enabled,refill_current_supply,refill_supply_unit,refill_threshold_quantity,refill_estimated_runout_date,refill_reminder_date,refill_reminder_mode,refill_notes,custom_form_text,custom_unit_text,source_metadata,start_date,end_date,notes,food_rule,rxcui,ingredients)"
+        }
+        return "id,user_id,medication_id,dosage,frequency_per_day,frequency_hours,food_rule,dosage_times,is_prn,is_manual,is_manual_schedule,medication_name,source_type,medication_form,strength_value,strength_unit,dose_amount,dose_amount_unit,dose_quantity,dose_unit,dose_quantity_unit,strength_amount,parsed_strength_unit,concentration_amount,concentration_unit,route,application_area,dose_display,food_rule_source,dose_details_source,is_dose_auto_filled,dose_details_confirmed_by_user,schedule_mode,times_per_day,times_per_week,selected_weekdays,interval_days,reminders_enabled,caregiver_reminders_enabled,visual_shape,visual_color,visual_background_color,refill_reminder_enabled,refill_current_supply,refill_supply_unit,refill_threshold_quantity,refill_estimated_runout_date,refill_reminder_date,refill_reminder_mode,refill_notes,custom_form_text,custom_unit_text,source_metadata,start_date,end_date,notes,is_active"
+    }
+
+    private func debugDate(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate]
+        return formatter.string(from: date)
+    }
+    #endif
 
 }
 

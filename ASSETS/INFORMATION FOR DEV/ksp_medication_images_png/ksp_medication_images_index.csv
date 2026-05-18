@@ -1,0 +1,130 @@
+file_name,product_name,dose_or_strength,dosage_form,page_number,confidence,notes
+acetab_oral_solution_5mg_5ml.png,ACETAB ORAL SOLUTION,5mg/5ml,oral_solution,30,high,no_mask_saved_as_is
+acetab_tablets_25mg_50mg.png,ACETAB TABLETS,25mg_50mg,tablets,6,high,mask_applied
+acetylcysteine_oral_solution.png,ACETYLCYSTEINE ORAL SOLUTION,see_product_name,oral_solution,30,high,no_mask_saved_as_is
+allergetin_syrup.png,ALLERGETIN SYRUP,see_product_name,syrup,21,high,mask_applied
+aloxal_suspension.png,ALOXAL SUSPENSION,see_product_name,suspension,12,high,mask_applied
+bentosac_gastro_resistant_tablets_20mg.png,BENTOSAC GASTRO-RESISTANT TABLETS,20mg,tablets,10,high,mask_applied
+bentosac_gastro_resistant_tablets_40mg.png,BENTOSAC GASTRO-RESISTANT TABLETS,40mg,tablets,10,high,mask_applied
+calsyr_syrup.png,CALSYR SYRUP,see_product_name,syrup,53,high,mask_applied
+ciflox_tablets_250mg.png,CIFLOX TABLETS,250mg,tablets,2,high,mask_applied
+ciprofloxacin_injection_for_iv_infusion_0_2_percent.png,CIPROFLOXACIN INJECTION FOR IV INFUSION,0_2_percent,infusion,37,high,mask_applied
+clavomox_suspension_457mg_5ml.png,CLAVOMOX SUSPENSION,457mg/5ml,suspension,1,high,mask_applied
+clavomox_tablets_1g.png,CLAVOMOX TABLETS,1g,tablets,1,high,mask_applied
+clobesol_cream.png,CLOBESOL CREAM,see_product_name,cream,49,high,mask_applied
+clotrimac_cream_1_percent.png,CLOTRIMAC CREAM,1_percent,cream,52,high,mask_applied
+clotrimac_vaginal_pessary_100mg_500mg.png,CLOTRIMAC VAGINAL PESSARY,100mg_500mg,pessary,4,high,mask_applied
+clovirax_cream.png,CLOVIRAX CREAM,see_product_name,cream,51,high,mask_applied
+clovirax_ophthalmic_ointment_3_percent.png,CLOVIRAX OPHTHALMIC OINTMENT,3_percent,ointment,50,high,mask_applied
+co_varotin_film_coated_tablets_160mg_12_5mg.png,CO-VAROTIN FILM COATED TABLETS,160mg_12_5mg,tablets,7,high,mask_applied
+co_varotin_film_coated_tablets_80mg_12_5mg.png,CO-VAROTIN FILM COATED TABLETS,80mg_12_5mg,tablets,7,high,mask_applied
+cotrax_solution_for_injection_100mcg_ml.png,COTRAX SOLUTION FOR INJECTION,100mcg/ml,injection,40,high,no_mask_saved_as_is
+dextrokuf_syrup.png,DEXTROKUF SYRUP,see_product_name,syrup,21,high,mask_applied
+diclofast_tablets_50mg.png,DICLOFAST TABLETS,50mg,tablets,24,high,mask_applied
+diclona_solution_for_injection_75mg_3ml.png,DICLONA SOLUTION FOR INJECTION,75mg/3ml,injection,42,high,mask_applied
+diclona_suppositories_100mg.png,DICLONA SUPPOSITORIES,100mg,suppositories,27,high,mask_applied
+diclona_suppositories_100mg_v2.png,unknown_p28_5,see_product_name,unknown,28,low,no_mask_saved_as_is
+diclona_suppositories_50mg.png,DICLONA SUPPOSITORIES,50mg,suppositories,27,high,mask_applied
+diclona_suppositories_50mg_v2.png,unknown_p28_4,see_product_name,unknown,28,low,no_mask_saved_as_is
+dilanyl_syrup.png,DILANYL SYRUP,see_product_name,syrup,21,high,mask_applied
+dramylin_paediatric_syrup.png,DRAMYLIN PAEDIATRIC SYRUP,see_product_name,syrup,20,high,mask_applied
+dramylin_syrup.png,DRAMYLIN SYRUP,see_product_name,syrup,20,high,mask_applied
+dulax_suppositories_10mg.png,DULAX SUPPOSITORIES,10mg,suppositories,14,high,no_mask_saved_as_is
+dulax_suppositories_10mg_adults.png,unknown_p14_5,see_product_name,unknown,14,low,no_mask_saved_as_is
+dulax_suppositories_5mg.png,DULAX SUPPOSITORIES,5mg,suppositories,14,high,no_mask_saved_as_is
+dulax_suppositories_5mg_children.png,unknown_p14_4,see_product_name,unknown,14,low,no_mask_saved_as_is
+esmosec_gastro_resistant_tablets_20mg_40mg.png,ESMOSEC GASTRO-RESISTANT TABLETS,20mg_40mg,tablets,11,high,mask_applied
+fenamic_capsules_250mg.png,FENAMIC CAPSULES,250mg,capsules,24,high,mask_applied
+fludrex_syrup.png,FLUDREX SYRUP,see_product_name,syrup,15,high,mask_applied
+fludrex_tablets.png,FLUDREX TABLETS,see_product_name,tablets,15,high,mask_applied
+fluxetyl_capsules_20mg.png,FLUXETYL CAPSULES,20mg,capsules,33,high,mask_applied
+fluxetyl_capsules_20mg_v2.png,unknown_p34_2,see_product_name,unknown,34,low,mask_applied
+fluxetyl_oral_solution_20mg_5ml.png,FLUXETYL ORAL SOLUTION,20mg/5ml,oral_solution,31,high,mask_applied
+fluxetyl_oral_solution_20mg_5ml_v2.png,unknown_p31_3,see_product_name,unknown,31,low,mask_applied
+folitab_oral_solution_2_5mg_5ml.png,FOLITAB ORAL SOLUTION,2_5mg/5ml,oral_solution,30,high,no_mask_saved_as_is
+folitab_tablets_1mg_5mg.png,FOLITAB TABLETS,1mg_5mg,tablets,53,high,mask_applied
+fusitin_cream.png,FUSITIN CREAM,see_product_name,cream,48,high,mask_applied
+fusix_solution_for_injection_10mg_ml.png,FUSIX SOLUTION FOR INJECTION,10mg/ml,injection,37,high,mask_applied
+fusix_tablets_40mg.png,FUSIX TABLETS,40mg,tablets,8,high,mask_applied
+gentamid_injection_usp_40mg_ml.png,GENTAMID INJECTION USP,40mg/ml,injection,44,high,mask_applied
+histan_syrup.png,HISTAN SYRUP,see_product_name,syrup,17,high,mask_applied
+histan_tablets_4mg.png,HISTAN TABLETS,4mg,tablets,17,high,mask_applied
+hydrocort_cream.png,HYDROCORT CREAM,see_product_name,cream,51,high,mask_applied
+hyopan_syrup.png,HYOPAN SYRUP,see_product_name,syrup,11,high,mask_applied
+idrex_allergy_eye_drops_2_percent_ectoin_ampoules.png,unknown_p46_2,see_product_name,unknown,46,low,mask_applied
+idrex_eye_drops_2_percent_ectoin.png,IDREX EYE DROPS,2_percent_ectoin,drops,45,high,mask_applied
+idrex_hypertonic_nasal_spray_solution.png,IDREX HYPERTONIC NASAL SPRAY SOLUTION,see_product_name,spray,45,high,mask_applied
+idrex_hypertonic_nasal_spray_solution_v2.png,IDREX HYPERTONIC NASAL SPRAY SOLUTION WITH ECTOIN,see_product_name,solution,46,high,mislabeled_as_inhalation_actually_nasal_spray_v2
+idrex_inhalation_solution_ectoin.png,REGROW 2 PERCENT TOPICAL SOLUTION,see_product_name,solution,47,high,mask_applied
+iprofen_suspension_100mg_5ml.png,IPROFEN SUSPENSION,100mg/5ml,suspension,27,high,mask_applied
+iprofen_tablets_200mg_400mg.png,IPROFEN TABLETS,200mg_400mg,tablets,26,high,mask_applied
+ironix_solution_for_iv_injection.png,IRONIX SOLUTION FOR IV INJECTION,see_product_name,injection,38,high,mask_applied
+kulax_syrup.png,KULAX SYRUP,see_product_name,syrup,13,high,mask_applied
+lergicort_ointment.png,LERGICORT OINTMENT,see_product_name,ointment,49,high,mask_applied
+livox_film_coated_tablets_500mg.png,LIVOX FILM COATED TABLETS,500mg,tablets,3,high,mask_applied
+loraday_syrup.png,LORADAY SYRUP,see_product_name,syrup,16,high,mask_applied
+loraday_tablets_10mg.png,LORADAY TABLETS,10mg,tablets,16,high,mask_applied
+metaphage_500mg_50_100_tablets_vildagliptin_50_mg.png,Metaphage 500mg: 50 & 100 Tablets,Vildagliptin 50 mg,tablet,56,high,mask_applied
+metaphage_tablets.png,METAPHAGE TABLETS,see_product_name,tablet,56,high,mask_applied
+metaphage_tablets_500mg_850mg_1000mg.png,METAPHAGE TABLETS,500mg_850mg_1000mg,tablets,55,high,mask_applied
+minisec_capsules_20mg.png,MINISEC CAPSULES,20mg,capsules,12,high,mask_applied
+minisec_powder_for_solution_for_infusion.png,MINISEC POWDER FOR SOLUTION FOR INFUSION,see_product_name,powder,36,high,mask_applied
+mocilin_capsules_500mg.png,MOCILIN CAPSULES,500mg,capsules,5,high,mask_applied
+nourax_concentrate_for_solution_for_infusion_100mcg_ml.png,NOURAX CONCENTRATE FOR SOLUTION FOR INFUSION,100mcg/ml,concentrate,36,high,mask_applied
+onsita_film_coated_tablets_4mg_8mg.png,ONSITA FILM COATED TABLETS,4mg_8mg,tablets,14,high,mask_applied
+onsita_solution_for_injection_or_infusion_4mg_2ml.png,ONSITA SOLUTION FOR INJECTION OR INFUSION,4mg/2ml,injection,38,high,mask_applied
+onsita_syrup_4mg_5ml.png,ONSITA SYRUP,4mg/5ml,syrup,32,high,mask_applied
+oralite_light_sachet.png,ORALITE LIGHT SACHET,see_product_name,sachet,54,high,mask_applied
+oralite_sachet.png,ORALITE SACHET,see_product_name,sachet,54,high,mask_applied
+ozan_cream_2_percent.png,OZAN CREAM,2_percent,cream,52,high,mask_applied
+panadrex_baby_infant_syrup.png,PANADREX BABY INFANT SYRUP,see_product_name,syrup,23,high,mask_applied
+panadrex_children_suspension_250mg_5ml.png,PANADREX CHILDREN SUSPENSION,250mg/5ml,suspension,23,high,mask_applied
+panadrex_iv_infusion_1g_100ml.png,PANADREX IV INFUSION,1g/100ml,infusion,42,high,mask_applied
+panadrex_max_tablets_500mg.png,PANADREX MAX TABLETS,500mg,tablets,25,high,mask_applied
+panadrex_pure_tablets_500mg.png,PANADREX PURE TABLETS,500mg,tablets,25,high,mask_applied
+panadrex_suppositories.png,PANADREX SUPPOSITORIES,see_product_name,suppositories,26,high,mask_applied
+paracetamol_iv_infusion_1g_100ml.png,PARACETAMOL IV INFUSION,1g/100ml,infusion,35,high,mask_applied
+prometin_syrup.png,PROMETIN SYRUP,see_product_name,syrup,33,high,mask_applied
+regrow_2_percent_minoxidil_cutaneous_solution_spray.png,REGROW CUTANEOUS SOLUTION SPRAY,2%,cutaneous_solution_spray,48,high,mask_applied
+regrow_5_percent_minoxidil_cutaneous_solution_spray.png,REGROW CUTANEOUS SOLUTION SPRAY,5%,cutaneous_solution_spray,48,high,mask_applied
+ropenem_powder_for_solution_for_injection_or_infusion_500mg_1g.png,ROPENEM POWDER FOR SOLUTION FOR INJECTION OR INFUSION,500mg_1g,powder,41,high,mask_applied
+roxicef_im_or_iv_injection_or_infusion.png,ROXICEF IM OR IV INJECTION OR INFUSION,see_product_name,injection,44,high,mask_applied
+roxicef_powder_for_solution_for_injection_or_infusion.png,ROXICEF POWDER FOR SOLUTION FOR INJECTION OR INFUSION,see_product_name,powder,41,high,mask_applied
+roztor_tablets_10mg.png,ROZTOR TABLETS,10mg,tablets,8,high,no_mask_saved_as_is
+roztor_tablets_10mg_28tab.png,unknown_p8_4,see_product_name,unknown,8,low,no_mask_saved_as_is
+roztor_tablets_20mg.png,ROZTOR TABLETS,20mg,tablets,8,high,no_mask_saved_as_is
+salosin_modified_release_capsules_0_4mg.png,SALOSIN MODIFIED RELEASE CAPSULES,0_4mg,capsules,28,high,no_mask_saved_as_is
+silvazine_cream.png,SILVAZINE CREAM,see_product_name,cream,50,high,mask_applied
+sitralix_tablets_10mg_20mg.png,SITRALIX TABLETS,10mg_20mg,tablets,34,high,mask_applied
+sodium_chloride_intravenous_infusion_0_9_percent.png,SODIUM CHLORIDE INTRAVENOUS INFUSION,0_9_percent,infusion,43,high,mask_applied
+sterile_water_for_injections.png,STERILE WATER FOR INJECTIONS,see_product_name,injection,43,high,mask_applied
+suprazole_iv_infusion_500mg_100ml.png,SUPRAZOLE IV INFUSION,500mg/100ml,infusion,35,high,mask_applied
+suprazole_suspension_200mg_5ml.png,SUPRAZOLE SUSPENSION,200mg/5ml,suspension,3,high,mask_applied
+suprazole_tablets_200mg.png,SUPRAZOLE TABLETS,200mg,tablets,2,high,mask_applied
+suprazole_tablets_400mg.png,SUPRAZOLE TABLETS,400mg,tablets,2,high,mask_applied
+tenol_tablets_50mg_100mg.png,TENOL TABLETS,50mg_100mg,tablets,6,high,mask_applied
+theraprim_suspension.png,unknown_p3_3,see_product_name,unknown,3,low,mask_applied
+tikatrom_oral_solution.png,TIKATROM ORAL SOLUTION,see_product_name,oral_solution,31,high,mask_applied
+tractoban_concentrate_for_solution_for_infusion_37_5mg_5ml.png,TRACTOBAN CONCENTRATE FOR SOLUTION FOR INFUSION,37_5mg/5ml,concentrate,39,high,mask_applied
+tractoban_concentrate_for_solution_for_infusion_37_5mg_v2.png,unknown_p40_4,see_product_name,unknown,40,low,no_mask_saved_as_is
+tractoban_solution_for_injection_6_75mg_0_9ml.png,TRACTOBAN SOLUTION FOR INJECTION,6_75mg/0_9ml,injection,39,high,mask_applied
+tractoban_solution_for_injection_6_75mg_v2.png,unknown_p40_3,see_product_name,unknown,40,low,no_mask_saved_as_is
+tripofed_dm_syrup.png,TRIPOFED DM SYRUP,see_product_name,syrup,18,high,mask_applied
+tripofed_expectorant_syrup.png,TRIPOFED EXPECTORANT SYRUP,see_product_name,syrup,22,high,mask_applied
+tripofed_syrup.png,unknown_p17_3,see_product_name,unknown,17,low,mask_applied
+tropsen_concentrate_for_solution_for_infusion_12_5mg_5ml.png,TROPSEN CONCENTRATE FOR SOLUTION FOR INFUSION,12_5mg/5ml,concentrate,40,high,no_mask_saved_as_is
+valbix_film_coated_tablets_15mg.png,unknown_p9_3,see_product_name,unknown,9,low,no_mask_saved_as_is
+valbix_film_coated_tablets_20mg.png,unknown_p9_4,see_product_name,unknown,9,low,no_mask_saved_as_is
+varotin_film_coated_tablets_160mg.png,VAROTIN FILM COATED TABLETS,160mg,tablets,7,high,mask_applied
+varotin_film_coated_tablets_80mg.png,VAROTIN FILM COATED TABLETS,80mg,tablets,7,high,mask_applied
+vega_tablets_50mg.png,VEGA TABLETS,50mg,tablets,55,high,mask_applied
+veladra_film_coated_tablets_100mg_v2.png,unknown_p30_4,see_product_name,unknown,30,low,no_mask_saved_as_is
+veladra_film_coated_tablets_25mg.png,VELADRA FILM COATED TABLETS,25mg,tablets,29,high,mask_applied
+veladra_film_coated_tablets_25mg_v2.png,unknown_p30_6,see_product_name,unknown,30,low,no_mask_saved_as_is
+veladra_film_coated_tablets_50mg.png,VELADRA FILM COATED TABLETS,50mg,tablets,29,high,mask_applied
+veladra_film_coated_tablets_50mg_v2.png,unknown_p30_5,see_product_name,unknown,30,low,no_mask_saved_as_is
+ventol_syrup_2mg_5ml.png,VENTOL SYRUP,2mg_5ml,syrup,19,high,mask_applied
+ventol_tablets_2mg_4mg.png,VENTOL TABLETS,2mg_4mg,tablets,19,high,mask_applied
+vermonil_suspension.png,VERMONIL SUSPENSION,see_product_name,suspension,13,high,mask_applied
+xalafil_tablets_5mg_10mg_20mg.png,XALAFIL TABLETS,5mg_10mg_20mg,tablets,28,high,mask_applied
+zalocain_gel.png,ZALOCAIN GEL,see_product_name,gel,48,high,mask_applied

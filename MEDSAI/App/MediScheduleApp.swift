@@ -1,5 +1,6 @@
 import SwiftUI
 import Supabase
+import UserNotifications
 
 @main
 @MainActor
@@ -39,9 +40,9 @@ struct MediScheduleApp: App {
         do {
             _ = try await SupabaseManager.shared.client.auth.session
             if SupabaseManager.shared.client.auth.currentSession?.user.id != nil {
-                settings.didChooseEntry = true
-                settings.onboardingCompleted = true
-                await settings.loadRoutineFromSupabase()
+                await settings.bootstrapAuthenticatedSession()
+                medsRepo.start()
+                refreshRemindersIfAuthorized()
                 return
             }
         } catch {
@@ -71,6 +72,8 @@ struct MediScheduleApp: App {
                     settings.didChooseEntry = true
                     settings.onboardingCompleted = true
                     await settings.loadRoutineFromSupabase()
+                    medsRepo.start()
+                    refreshRemindersIfAuthorized()
                     return
                 }
             } catch {
@@ -85,5 +88,14 @@ struct MediScheduleApp: App {
         // 3) No session at all — stay on landing page
         settings.didChooseEntry = false
         settings.onboardingCompleted = false
+    }
+
+    private func refreshRemindersIfAuthorized() {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
+            Task { @MainActor in
+                medsRepo.refreshAllReminders()
+            }
+        }
     }
 }

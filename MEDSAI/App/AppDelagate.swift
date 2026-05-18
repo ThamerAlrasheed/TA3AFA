@@ -11,9 +11,6 @@ class AppDelegate: NSObject, UIApplicationDelegate {
         // Notifications: delegate + categories
         NotificationsManager.shared.configure()
 
-        // (Optional) Ask for permission right away; you also request later in Today view.
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
-
         return true
     }
 }

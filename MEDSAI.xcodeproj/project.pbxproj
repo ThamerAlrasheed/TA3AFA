@@ -19,6 +19,8 @@
 		04AC774D2E852809008FE15B /* FirebaseFirestore in Frameworks */ = {isa = PBXBuildFile; productRef = 04AC774C2E852809008FE15B /* FirebaseFirestore */; };
 		04AC774F2E852809008FE15B /* FirebaseStorage in Frameworks */ = {isa = PBXBuildFile; productRef = 04AC774E2E852809008FE15B /* FirebaseStorage */; };
 		04AC77522E852820008FE15B /* GoogleSignInSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 04AC77512E852820008FE15B /* GoogleSignInSwift */; };
+		04BEEF012F76000100ABCDEF /* MedicationNormalizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04BEEF022F76000100ABCDEF /* MedicationNormalizationTests.swift */; };
+		1F0000000000000000000001 /* SDWebImageSwiftUI in Frameworks */ = {isa = PBXBuildFile; productRef = 1F0000000000000000000003 /* SDWebImageSwiftUI */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -42,6 +44,7 @@
 		040BD0D22E4F8D9500E44F60 /* MEDSAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MEDSAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		040BD0E12E4F8D9700E44F60 /* MEDSAITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MEDSAITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		040BD0EB2E4F8D9700E44F60 /* MEDSAIUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MEDSAIUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		04BEEF022F76000100ABCDEF /* MedicationNormalizationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MedicationNormalizationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -82,6 +85,7 @@
 				04AC77522E852820008FE15B /* GoogleSignInSwift in Frameworks */,
 				04AC774F2E852809008FE15B /* FirebaseStorage in Frameworks */,
 				04AC77492E852809008FE15B /* FirebaseAuth in Frameworks */,
+				1F0000000000000000000001 /* SDWebImageSwiftUI in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -106,6 +110,7 @@
 			isa = PBXGroup;
 			children = (
 				040BD0D42E4F8D9500E44F60 /* MEDSAI */,
+				04BEEF032F76000100ABCDEF /* MEDSAITests */,
 				04AC77442E8527A9008FE15B /* Frameworks */,
 				040BD0D32E4F8D9500E44F60 /* Products */,
 			);
@@ -126,6 +131,14 @@
 			children = (
 			);
 			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		04BEEF032F76000100ABCDEF /* MEDSAITests */ = {
+			isa = PBXGroup;
+			children = (
+				04BEEF022F76000100ABCDEF /* MedicationNormalizationTests.swift */,
+			);
+			path = MEDSAITests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -160,6 +173,7 @@
 				04272B9C2F74065000CDF2D0 /* Realtime */,
 				04272B9E2F74065000CDF2D0 /* Storage */,
 				04272BA02F74065000CDF2D0 /* Supabase */,
+				1F0000000000000000000003 /* SDWebImageSwiftUI */,
 			);
 			productName = MEDSAI;
 			productReference = 040BD0D22E4F8D9500E44F60 /* MEDSAI.app */;
@@ -242,6 +256,7 @@
 				04AC77452E852809008FE15B /* XCRemoteSwiftPackageReference "firebase-ios-sdk" */,
 				04AC77502E852820008FE15B /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */,
 				04272B952F74065000CDF2D0 /* XCRemoteSwiftPackageReference "supabase-swift" */,
+				1F0000000000000000000002 /* XCRemoteSwiftPackageReference "SDWebImageSwiftUI" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 040BD0D32E4F8D9500E44F60 /* Products */;
@@ -291,6 +306,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				04BEEF012F76000100ABCDEF /* MedicationNormalizationTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -645,6 +661,14 @@
 				minimumVersion = 9.0.0;
 			};
 		};
+		1F0000000000000000000002 /* XCRemoteSwiftPackageReference "SDWebImageSwiftUI" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/SDWebImage/SDWebImageSwiftUI";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 3.0.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -707,6 +731,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 04AC77502E852820008FE15B /* XCRemoteSwiftPackageReference "GoogleSignIn-iOS" */;
 			productName = GoogleSignInSwift;
+		};
+		1F0000000000000000000003 /* SDWebImageSwiftUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 1F0000000000000000000002 /* XCRemoteSwiftPackageReference "SDWebImageSwiftUI" */;
+			productName = SDWebImageSwiftUI;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

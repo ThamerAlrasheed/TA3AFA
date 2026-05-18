@@ -34,6 +34,7 @@ final class MedCatalogRepo {
         let common_side_effects: [String]?
         let interactions_to_avoid: [String]?
         let what_for: [String]?
+        let warnings: [String]?
         let rxcui: String?
         let active_ingredients: [String]?
     }
@@ -61,7 +62,10 @@ final class MedCatalogRepo {
             let food_rule: String?
             let min_interval_hours: Int?
             let strengths: [String]?
+            let what_for: [String]?
+            let warnings: [String]?
             let rxcui: String?
+            let active_ingredients: [String]?
         }
 
         let rows: [Row] = try await supabase.client
@@ -76,21 +80,21 @@ final class MedCatalogRepo {
 
         let payload = DrugPayload(
             title: row.name,
-            strengths: row.strengths ?? [],
+            strengths: MedicationStrengthFormatter.displayableStrengths(from: row.strengths ?? []),
             dosageForms: [],
             foodRule: row.food_rule,
             minIntervalHours: row.min_interval_hours,
-            ingredients: [],
-            indications: [],
+            ingredients: row.active_ingredients ?? [],
+            indications: row.what_for ?? [],
             howToTake: row.how_to_take ?? [],
             commonSideEffects: row.common_side_effects ?? [],
-            importantWarnings: [],
+            importantWarnings: row.warnings ?? [],
             interactionsToAvoid: row.interactions_to_avoid ?? [],
             references: nil,
             kbKey: nil,
             rxcui: row.rxcui,
             id: UUID(uuidString: row.id)
-        )
+        ).normalizedForPatientDisplay(fallbackTitle: row.name)
 
         return MedCatalogEntry(
             key: normalizeKey(row.name),
@@ -115,6 +119,7 @@ final class MedCatalogRepo {
             .value
 
         var finalId: String? = existing.first?.id
+        let normalizedPayload = payload.normalizedForPatientDisplay(fallbackTitle: display)
 
         if existing.isEmpty {
             struct InsertResult: Decodable { let id: String }
@@ -123,15 +128,16 @@ final class MedCatalogRepo {
                 .insert(
                     MedicationInsertPayload(
                         name: display,
-                        how_to_take: payload.howToTake,
-                        food_rule: payload.foodRule ?? "none",
-                        min_interval_hours: payload.minIntervalHours,
-                        strengths: payload.strengths,
-                        common_side_effects: payload.commonSideEffects,
-                        interactions_to_avoid: payload.interactionsToAvoid,
-                        what_for: payload.indications,
-                        rxcui: payload.rxcui,
-                        active_ingredients: payload.ingredients.isEmpty ? nil : payload.ingredients
+                        how_to_take: normalizedPayload.howToTake,
+                        food_rule: normalizedPayload.foodRule ?? "none",
+                        min_interval_hours: normalizedPayload.minIntervalHours,
+                        strengths: normalizedPayload.strengths,
+                        common_side_effects: normalizedPayload.commonSideEffects,
+                        interactions_to_avoid: normalizedPayload.interactionsToAvoid,
+                        what_for: normalizedPayload.indications,
+                        warnings: normalizedPayload.importantWarnings,
+                        rxcui: normalizedPayload.rxcui,
+                        active_ingredients: normalizedPayload.ingredients.isEmpty ? nil : normalizedPayload.ingredients
                     )
                 )
                 .select("id")
@@ -139,47 +145,44 @@ final class MedCatalogRepo {
                 .value
             finalId = inserted.first?.id
         } else if let finalId {
-            if !payload.ingredients.isEmpty {
-                struct IngredientUpdatePayload: Encodable {
-                    let rxcui: String?
-                    let active_ingredients: [String]
-                }
-
-                try? await supabase.client
-                    .from("medications")
-                    .update(IngredientUpdatePayload(rxcui: payload.rxcui, active_ingredients: payload.ingredients))
-                    .eq("id", value: finalId)
-                    .execute()
-            } else if let rxcui = payload.rxcui {
-                struct RxCUIUpdatePayload: Encodable {
-                    let rxcui: String
-                }
-
-                try? await supabase.client
-                    .from("medications")
-                    .update(RxCUIUpdatePayload(rxcui: rxcui))
-                    .eq("id", value: finalId)
-                    .execute()
-            }
+            try? await supabase.client
+                .from("medications")
+                .update(
+                    MedicationInsertPayload(
+                        name: display,
+                        how_to_take: normalizedPayload.howToTake,
+                        food_rule: normalizedPayload.foodRule ?? "none",
+                        min_interval_hours: normalizedPayload.minIntervalHours,
+                        strengths: normalizedPayload.strengths,
+                        common_side_effects: normalizedPayload.commonSideEffects,
+                        interactions_to_avoid: normalizedPayload.interactionsToAvoid,
+                        what_for: normalizedPayload.indications,
+                        warnings: normalizedPayload.importantWarnings,
+                        rxcui: normalizedPayload.rxcui,
+                        active_ingredients: normalizedPayload.ingredients.isEmpty ? nil : normalizedPayload.ingredients
+                    )
+                )
+                .eq("id", value: finalId)
+                .execute()
         }
 
         var updatedPayload = payload
         if let fid = finalId {
             updatedPayload = DrugPayload(
-                title: payload.title,
-                strengths: payload.strengths,
-                dosageForms: payload.dosageForms,
-                foodRule: payload.foodRule,
-                minIntervalHours: payload.minIntervalHours,
-                ingredients: payload.ingredients,
-                indications: payload.indications,
-                howToTake: payload.howToTake,
-                commonSideEffects: payload.commonSideEffects,
-                importantWarnings: payload.importantWarnings,
-                interactionsToAvoid: payload.interactionsToAvoid,
-                references: payload.references,
-                kbKey: payload.kbKey,
-                rxcui: payload.rxcui,
+                title: normalizedPayload.title,
+                strengths: normalizedPayload.strengths,
+                dosageForms: normalizedPayload.dosageForms,
+                foodRule: normalizedPayload.foodRule,
+                minIntervalHours: normalizedPayload.minIntervalHours,
+                ingredients: normalizedPayload.ingredients,
+                indications: normalizedPayload.indications,
+                howToTake: normalizedPayload.howToTake,
+                commonSideEffects: normalizedPayload.commonSideEffects,
+                importantWarnings: normalizedPayload.importantWarnings,
+                interactionsToAvoid: normalizedPayload.interactionsToAvoid,
+                references: normalizedPayload.references,
+                kbKey: normalizedPayload.kbKey,
+                rxcui: normalizedPayload.rxcui,
                 id: UUID(uuidString: fid)
             )
         }

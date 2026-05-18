@@ -59,6 +59,15 @@ final class SearchHistoryRepo: ObservableObject {
     func add(query: String) async {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !q.isEmpty, let uid = supabase.currentUserID else { return }
+        let normalizedQuery = q.lowercased()
+        if recent.first?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == normalizedQuery {
+            return
+        }
+
+        recent = [q] + recent.filter {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() != normalizedQuery
+        }
+
         let uidString = uid.uuidString.lowercased()
         do {
             try await supabase.client

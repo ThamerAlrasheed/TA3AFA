@@ -243,19 +243,61 @@ private extension OpenFDAService {
         let data = try await fetchData(url: url, timeout: 6)
         let decoded: NDCResponse = try JSONDecoder().decode(NDCResponse.self, from: data)
 
+        let queryKey = normalizedIngredientKey(value)
         var strengths: [String] = []
         for p in decoded.results ?? [] {
-            for a in p.active_ingredients ?? [] {
-                if let s = a.strength { strengths.append(cleanStrength(s)) }
+            let ingredients = p.active_ingredients ?? []
+            for a in ingredients {
+                guard shouldUseStrength(
+                    ingredientName: a.name,
+                    product: p,
+                    queryKey: queryKey,
+                    field: field,
+                    activeIngredientCount: ingredients.count
+                ) else { continue }
+
+                if let s = a.strength, let display = cleanStrength(s) {
+                    strengths.append(display)
+                }
             }
         }
-        return Array(uniq(strengths)).sorted(by: strengthSort)
+        return MedicationStrengthFormatter.displayableStrengths(from: Array(uniq(strengths))).sorted(by: strengthSort)
     }
 
-    static func cleanStrength(_ s: String) -> String {
-        let parts = s.split(separator: " ")
-        if parts.count >= 2 { return "\(parts[0]) \(parts[1])" }
-        return s
+    static func shouldUseStrength(
+        ingredientName: String?,
+        product: NDCProduct,
+        queryKey: String,
+        field: String,
+        activeIngredientCount: Int
+    ) -> Bool {
+        let ingredientKey = normalizedIngredientKey(ingredientName ?? "")
+        if !ingredientKey.isEmpty && (ingredientKey.contains(queryKey) || queryKey.contains(ingredientKey)) {
+            return true
+        }
+
+        let genericKey = normalizedIngredientKey(product.generic_name ?? "")
+        if field == "generic_name", !genericKey.isEmpty, genericKey.contains(queryKey), activeIngredientCount <= 1 {
+            return true
+        }
+
+        let brandKey = normalizedIngredientKey(product.brand_name ?? "")
+        if field == "brand_name", !brandKey.isEmpty, brandKey.contains(queryKey), activeIngredientCount <= 1 {
+            return true
+        }
+
+        return false
+    }
+
+    static func normalizedIngredientKey(_ value: String) -> String {
+        value
+            .lowercased()
+            .replacingOccurrences(of: #"[^a-z0-9]+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func cleanStrength(_ s: String) -> String? {
+        MedicationStrengthFormatter.displayableStrength(from: s)
     }
 
     static func strengthSort(_ a: String, _ b: String) -> Bool {
@@ -341,15 +383,7 @@ private struct RxApprox: Decodable {
 // MARK: - Small helpers
 
 private func cleanLabelText(_ raw: String) -> String {
-    // Normalize common bullet characters and excess whitespace.
-    var s = raw.replacingOccurrences(of: "\r", with: "\n")
-    s = s.replacingOccurrences(of: "•", with: "\n• ")
-    s = s.replacingOccurrences(of: " · ", with: " ")
-    // compress multiple newlines
-    while s.contains("\n\n\n") { s = s.replacingOccurrences(of: "\n\n\n", with: "\n\n") }
-    // trim spaces per line
-    s = s.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.joined(separator: "\n")
-    return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    PatientLabelSanitizer.cleanText(raw, maxCharacters: 1_200) ?? ""
 }
 
 private func uniq<T: Hashable>(_ arr: [T]) -> [T] {

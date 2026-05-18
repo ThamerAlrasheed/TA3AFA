@@ -27,7 +27,8 @@ extension DrugPayload {
         case .afterFood:  chips.append("Take after food")
         case .beforeFood: chips.append("Take before food")
         case .withFood:   chips.append("Take with food")
-        case .none: break
+        case .avoidWithFood: chips.append("Avoid with food")
+        case .notSure, .none: break
         }
         if let h = minIntervalHours { chips.append("~every \(h)h") }
         return chips

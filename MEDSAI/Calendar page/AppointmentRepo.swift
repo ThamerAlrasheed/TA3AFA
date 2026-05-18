@@ -42,7 +42,7 @@ final class AppointmentsRepo: ObservableObject {
     func fetchAppointments() async {
         guard let uid = supabase.currentUserID else { return }
         let uidString = uid.uuidString.lowercased()
-        isLoading = true; errorMessage = nil
+        isLoading = true; errorMessage = nil; items = []
         do {
             if supabase.isPatientMode || supabase.activePatientID != nil {
                 self.items = try await self.supabase.fetchPatientAppointments()

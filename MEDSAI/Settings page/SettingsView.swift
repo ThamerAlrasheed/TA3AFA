@@ -5,12 +5,15 @@ import UserNotifications
 
 struct SettingsView: View {
     @EnvironmentObject var settings: AppSettings
+    @EnvironmentObject var medsRepo: UserMedsRepo
 
-    @AppStorage("profile.firstName") private var firstName: String = ""
-    @AppStorage("profile.lastName")  private var lastName: String  = ""
-    @AppStorage("profile.dob")       private var dobISO: String    = ""
     @AppStorage("appearance.language") private var languageCode: String =
         Locale.current.language.languageCode?.identifier ?? "en"
+
+    #if DEBUG
+    @State private var debugSnapshot: DebugContextSnapshot?
+    @AppStorage("debug.showContextPanel") private var showDebugContextPanel = false
+    #endif
 
     private var supabase: SupabaseManager { .shared }
 
@@ -19,7 +22,7 @@ struct SettingsView: View {
     }
 
     private var isCaregiver: Bool {
-        settings.role == .caregiver
+        settings.role == .caregiver || settings.activePatientID != nil
     }
 
     private var hasSelectedPatient: Bool {
@@ -43,12 +46,12 @@ struct SettingsView: View {
         if settings.role == .patient {
             return "Your"
         }
-        let trimmed = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = "\(settings.firstName) \(settings.lastName)".trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? "Your" : trimmed
     }
 
     private var accountOwnerName: String? {
-        let trimmed = "\(firstName) \(lastName)".trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = "\(settings.firstName) \(settings.lastName)".trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
 
@@ -95,6 +98,9 @@ struct SettingsView: View {
                     }
                 } else {
                     ownPatientCareSections
+                    if settings.role == .regular {
+                        familySection(title: "Family Members", subtitle: "Manage family and care access")
+                    }
                     preferencesSection
                     if settings.role == .regular {
                         accountProfileSection
@@ -102,19 +108,40 @@ struct SettingsView: View {
                 }
 
                 helpLegalSection
+                #if DEBUG
+                if showDebugContextPanel {
+                    debugContextSection
+                }
+                #endif
                 sessionActionsSection
             }
             .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(Color.istsehPageBackground.ignoresSafeArea())
+            .avoidsTabBar()
             .navigationTitle("Settings")
             .tint(Color.istsehGreen)
             .onAppear {
-                Task { await hydrateNamesFromSupabase() }
+                Task {
+                    await settings.loadCurrentUserProfile()
+                    #if DEBUG
+                    await refreshDebugSnapshot()
+                    #endif
+                }
                 Task { await ensureNotificationAuthIfEnabled() }
             }
-            .onChange(of: firstName) { _, _ in Task { await persistNames() } }
-            .onChange(of: lastName)  { _, _ in Task { await persistNames() } }
+            .onChange(of: settings.firstName) { _, _ in Task { await persistNames() } }
+            .onChange(of: settings.lastName)  { _, _ in Task { await persistNames() } }
+            .onChange(of: settings.dateOfBirth) { _, _ in Task { await persistProfileDate() } }
+            .onChange(of: settings.activePatientID) { _, _ in
+                #if DEBUG
+                Task { await refreshDebugSnapshot() }
+                #endif
+            }
+            .onChange(of: languageCode) { _, _ in
+                NotificationCenter.default.post(name: NSNotification.Name("UserRoutineChanged"), object: nil)
+            }
         }
-        .safeAreaPadding(.bottom)
     }
 
     // MARK: - Profile Header Card
@@ -132,18 +159,31 @@ struct SettingsView: View {
                 }
                 .padding(.top, 16)
 
-                Text(headerTitle)
-                    .font(.title3.weight(.semibold))
-                    .multilineTextAlignment(.center)
-
-                if let headerSubtitle {
-                    Text(headerSubtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                if settings.isProfileLoading && !hasSelectedPatient {
+                    BrandedLoadingView(message: LoadingMessage.profile.text, style: .inline)
+                } else {
+                    Text(headerTitle)
+                        .font(.title3.weight(.semibold))
                         .multilineTextAlignment(.center)
+
+                    if let headerSubtitle {
+                        Text(headerSubtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+
+                    #if DEBUG
+                    if let error = settings.profileLoadError {
+                        Text("DEBUG profile load failed: \(error)")
+                            .font(.caption2)
+                            .foregroundStyle(.red)
+                            .multilineTextAlignment(.center)
+                    }
+                    #endif
                 }
 
-                if isCaregiver {
+                if settings.role != .patient {
                     CareProfileMenu(presentation: .pill) {
                         Task { await settings.loadRoutineFromSupabase() }
                     }
@@ -161,7 +201,8 @@ struct SettingsView: View {
             .padding(.bottom, 16)
         }
         .listRowInsets(EdgeInsets())
-        .listRowBackground(Color(.systemGroupedBackground))
+        .listRowBackground(Color.clear)
+        .listRowSeparator(.hidden)
     }
 
     private var headerIconName: String {
@@ -204,6 +245,7 @@ struct SettingsView: View {
                 ReminderSettingsView()
             }
         }
+        .listRowBackground(Color.istsehCard)
     }
 
     @ViewBuilder
@@ -239,6 +281,7 @@ struct SettingsView: View {
                 ReminderSettingsView()
             }
         }
+        .listRowBackground(Color.istsehCard)
 
         familySection(title: "Change Patient", subtitle: "Switch or manage family members")
     }
@@ -253,6 +296,7 @@ struct SettingsView: View {
                 FamilySettingsView().environmentObject(settings)
             }
         }
+        .listRowBackground(Color.istsehCard)
     }
 
     private var preferencesSection: some View {
@@ -293,6 +337,7 @@ struct SettingsView: View {
                 }
             }
         }
+        .listRowBackground(Color.istsehCard)
     }
 
     private var accountProfileSection: some View {
@@ -300,14 +345,14 @@ struct SettingsView: View {
             HStack {
                 Text("First name")
                 Spacer()
-                TextField("First", text: $firstName)
+                TextField("First", text: $settings.firstName)
                     .multilineTextAlignment(.trailing)
                     .textInputAutocapitalization(.words)
             }
             HStack {
                 Text("Last name")
                 Spacer()
-                TextField("Last", text: $lastName)
+                TextField("Last", text: $settings.lastName)
                     .multilineTextAlignment(.trailing)
                     .textInputAutocapitalization(.words)
             }
@@ -319,12 +364,13 @@ struct SettingsView: View {
             DatePicker(
                 "Date of birth",
                 selection: Binding(
-                    get: { dobFromISO(dobISO) ?? Date(timeIntervalSince1970: 0) },
-                    set: { dobISO = isoString(from: $0) }
+                    get: { settings.dateOfBirth ?? Date(timeIntervalSince1970: 0) },
+                    set: { settings.dateOfBirth = $0 }
                 ),
                 displayedComponents: .date
             )
         }
+        .listRowBackground(Color.istsehCard)
     }
 
     private var helpLegalSection: some View {
@@ -382,6 +428,7 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
         }
+        .listRowBackground(Color.istsehCard)
     }
 
     private var sessionActionsSection: some View {
@@ -395,41 +442,46 @@ struct SettingsView: View {
                 }
             }
         }
+        .listRowBackground(Color.istsehCard)
     }
 
     // MARK: - Supabase helpers
 
-    private func hydrateNamesFromSupabase() async {
-        guard firstName.isEmpty || lastName.isEmpty,
-              let uid = accountUserID else { return }
-        do {
-            struct Row: Decodable { let first_name: String?; let last_name: String? }
-            let rows: [Row] = try await supabase.client
-                .from("users")
-                .select("first_name, last_name")
-                .eq("id", value: uid.uuidString)
-                .limit(1)
-                .execute()
-                .value
-            if let row = rows.first {
-                if firstName.isEmpty, let fn = row.first_name, !fn.isEmpty { firstName = fn }
-                if lastName.isEmpty,  let ln = row.last_name,  !ln.isEmpty { lastName  = ln }
-            }
-        } catch { }
-    }
-
     private func persistNames() async {
         guard settings.role == .regular,
-              let uid = supabase.authenticatedUserID else { return }
-        let trimmedFirst = firstName.trimmingCharacters(in: .whitespaces)
-        let trimmedLast  = lastName.trimmingCharacters(in: .whitespaces)
+              let uid = supabase.authenticatedUserID,
+              settings.loadedProfileUserID == uid else { return }
+        let trimmedFirst = settings.firstName.trimmingCharacters(in: .whitespaces)
+        let trimmedLast  = settings.lastName.trimmingCharacters(in: .whitespaces)
         do {
             try await supabase.client
                 .from("users")
                 .update(["first_name": trimmedFirst, "last_name": trimmedLast])
-                .eq("id", value: uid.uuidString)
+                .eq("id", value: uid.uuidString.lowercased())
                 .execute()
-        } catch { }
+        } catch {
+            #if DEBUG
+            print("DEBUG_SESSION persistNames failed for \(uid.uuidString.lowercased()): \(error.localizedDescription)")
+            #endif
+        }
+    }
+
+    private func persistProfileDate() async {
+        guard settings.role == .regular,
+              let uid = supabase.authenticatedUserID,
+              settings.loadedProfileUserID == uid,
+              let date = settings.dateOfBirth else { return }
+        do {
+            try await supabase.client
+                .from("users")
+                .update(["date_of_birth": isoString(from: date)])
+                .eq("id", value: uid.uuidString.lowercased())
+                .execute()
+        } catch {
+            #if DEBUG
+            print("DEBUG_SESSION persistProfileDate failed for \(uid.uuidString.lowercased()): \(error.localizedDescription)")
+            #endif
+        }
     }
 
     // MARK: - Helpers
@@ -448,14 +500,10 @@ struct SettingsView: View {
 
     private func signOut() {
         Task {
-            try? await supabase.client.auth.signOut()
-            await MainActor.run {
-                PatientSessionStore.shared.clearAllSessionValuesBestEffort()
-                settings.stopActingAsPatient()
-                settings.role = .regular
-                settings.didChooseEntry = false
-                settings.onboardingCompleted = false
-            }
+            await settings.signOutCompletely()
+            #if DEBUG
+            await MainActor.run { debugSnapshot = nil }
+            #endif
         }
     }
 
@@ -506,7 +554,108 @@ struct SettingsView: View {
         Describe your issue here:
         """
     }
+
+    #if DEBUG
+    private var debugContextSection: some View {
+        Section("DEBUG Context") {
+            Button("Refresh Context Snapshot") {
+                Task { await refreshDebugSnapshot() }
+            }
+
+            if let snapshot = debugSnapshot {
+                DebugRow(label: "auth.uid", value: snapshot.authID)
+                DebugRow(label: "auth.email", value: snapshot.email)
+                DebugRow(label: "display profile id", value: snapshot.profileID)
+                DebugRow(label: "display name", value: snapshot.displayName)
+                DebugRow(label: "activePatientID", value: snapshot.activePatientID)
+                DebugRow(label: "activePatientName", value: snapshot.activePatientName)
+                DebugRow(label: "care-code active", value: snapshot.careCodeActive)
+                DebugRow(label: "allergies", value: "\(snapshot.allergyCount)")
+                DebugRow(label: "conditions", value: "\(snapshot.conditionCount)")
+                DebugRow(label: "medications", value: "\(snapshot.medCount)")
+                DebugRow(label: "pending med notifications", value: "\(snapshot.pendingMedicationNotifications)")
+            } else {
+                Text("No snapshot loaded")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .listRowBackground(Color.istsehCard)
+    }
+
+    private func refreshDebugSnapshot() async {
+        let authID = supabase.authenticatedUserID?.uuidString.lowercased() ?? "nil"
+        let email = supabase.client.auth.currentSession?.user.email ?? "nil"
+        let profileID = settings.loadedProfileUserID?.uuidString.lowercased() ?? "nil"
+        let displayName = accountOwnerName ?? "nil"
+        let activePatientID = settings.activePatientID ?? "nil"
+        let activePatientName = settings.activePatientName ?? "nil"
+        let careCodeActive = "\(supabase.isPatientMode)"
+        let patientID = medicalProfilePatientId
+
+        async let allergies = (try? DrugInfo.listAllergies(patientId: patientID)) ?? []
+        async let conditions = (try? DrugInfo.listConditions(patientId: patientID)) ?? []
+        let pendingMedicationCount = await pendingMedicationNotificationCount()
+        let loadedAllergies = await allergies
+        let loadedConditions = await conditions
+
+        await MainActor.run {
+            debugSnapshot = DebugContextSnapshot(
+                authID: authID,
+                email: email,
+                profileID: profileID,
+                displayName: displayName,
+                activePatientID: activePatientID,
+                activePatientName: activePatientName,
+                careCodeActive: careCodeActive,
+                allergyCount: loadedAllergies.count,
+                conditionCount: loadedConditions.count,
+                medCount: medsRepo.meds.count,
+                pendingMedicationNotifications: pendingMedicationCount
+            )
+        }
+    }
+
+    private func pendingMedicationNotificationCount() async -> Int {
+        await withCheckedContinuation { continuation in
+            UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
+                continuation.resume(returning: requests.filter { $0.identifier.hasPrefix("MED.") || $0.identifier.hasPrefix("MED_") }.count)
+            }
+        }
+    }
+    #endif
 }
+
+#if DEBUG
+private struct DebugContextSnapshot {
+    let authID: String
+    let email: String
+    let profileID: String
+    let displayName: String
+    let activePatientID: String
+    let activePatientName: String
+    let careCodeActive: String
+    let allergyCount: Int
+    let conditionCount: Int
+    let medCount: Int
+    let pendingMedicationNotifications: Int
+}
+
+private struct DebugRow: View {
+    let label: String
+    let value: String
+
+    var body: some View {
+        HStack(alignment: .top) {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Text(value)
+                .font(.caption.monospaced())
+                .multilineTextAlignment(.trailing)
+        }
+    }
+}
+#endif
 
 // MARK: - Reminder Settings Screen
 
@@ -516,6 +665,10 @@ private struct ReminderSettingsView: View {
     @State private var notificationsEnabled: Bool = true
     @State private var notifyDoses: Bool = true
     @State private var notifyAppointments: Bool = true
+    @State private var notifyCaregiverDoses: Bool = false
+    #if DEBUG
+    @AppStorage("debug.showContextPanel") private var showDebugContextPanel = false
+    #endif
 
     private var reminderContextKey: String {
         NotificationsManager.reminderContextKey()
@@ -536,7 +689,8 @@ private struct ReminderSettingsView: View {
                         } else {
                             notifyDoses = false
                             notifyAppointments = false
-                            UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
+                            notifyCaregiverDoses = false
+                            NotificationsManager.shared.cancelMedicationReminders()
                         }
                         persistReminderSettings()
                         NotificationCenter.default.post(name: NSNotification.Name("UserRoutineChanged"), object: nil)
@@ -555,8 +709,43 @@ private struct ReminderSettingsView: View {
                     .onChange(of: notifyAppointments) { _, _ in
                         persistReminderSettings()
                     }
+
+                if settings.activePatientID != nil {
+                    Toggle("Caregiver medication reminders", isOn: $notifyCaregiverDoses)
+                        .disabled(!notificationsEnabled || !notifyDoses)
+                        .onChange(of: notifyCaregiverDoses) { _, _ in
+                            persistReminderSettings()
+                            NotificationCenter.default.post(name: NSNotification.Name("UserRoutineChanged"), object: nil)
+                        }
+                }
             }
+            .listRowBackground(Color.istsehCard)
+
+            #if DEBUG
+            if showDebugContextPanel {
+                Section {
+                    Button("Test self reminder in 15 seconds") {
+                        NotificationsManager.shared.scheduleDebugMedicationReminder(type: .selfUser)
+                    }
+
+                    Button("Test family member reminder in 15 seconds") {
+                        NotificationsManager.shared.scheduleDebugMedicationReminder(type: .patient)
+                    }
+
+                    Button("Test caregiver reminder in 15 seconds") {
+                        NotificationsManager.shared.scheduleDebugMedicationReminder(type: .caregiver)
+                    }
+                } header: {
+                    Text("Developer Tests")
+                } footer: {
+                    Text("DEBUG only. These buttons are not compiled into production builds.")
+                }
+                .listRowBackground(Color.istsehCard)
+            }
+            #endif
         }
+        .scrollContentBackground(.hidden)
+        .background(Color.istsehPageBackground.ignoresSafeArea())
         .navigationTitle("Reminders")
         .navigationBarTitleDisplayMode(.inline)
         .tint(Color.istsehGreen)
@@ -576,12 +765,14 @@ private struct ReminderSettingsView: View {
         notificationsEnabled = NotificationsManager.reminderSetting("enabled", contextKey: reminderContextKey)
         notifyDoses = NotificationsManager.reminderSetting("doses", contextKey: reminderContextKey)
         notifyAppointments = NotificationsManager.reminderSetting("appts", contextKey: reminderContextKey)
+        notifyCaregiverDoses = NotificationsManager.reminderSetting("caregiverDoses", contextKey: reminderContextKey)
     }
 
     private func persistReminderSettings() {
         NotificationsManager.setReminderSetting(notificationsEnabled, setting: "enabled", contextKey: reminderContextKey)
         NotificationsManager.setReminderSetting(notifyDoses, setting: "doses", contextKey: reminderContextKey)
         NotificationsManager.setReminderSetting(notifyAppointments, setting: "appts", contextKey: reminderContextKey)
+        NotificationsManager.setReminderSetting(notifyCaregiverDoses, setting: "caregiverDoses", contextKey: reminderContextKey)
     }
 }
 

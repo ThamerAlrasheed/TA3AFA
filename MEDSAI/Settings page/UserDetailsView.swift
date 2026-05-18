@@ -20,19 +20,24 @@ struct RoutineSettingsView: View {
                 RoutineTimeRow(title: "Wake time", comps: $settings.wakeup,   defaultHour: 7)
                 RoutineTimeRow(title: "Bedtime",   comps: $settings.bedtime,  defaultHour: 23)
             }
+            .listRowBackground(Color.istsehCard)
 
             Section("Meals") {
                 RoutineTimeRow(title: "Breakfast", comps: $settings.breakfast, defaultHour: 8)
                 RoutineTimeRow(title: "Lunch",     comps: $settings.lunch,     defaultHour: 13)
                 RoutineTimeRow(title: "Dinner",    comps: $settings.dinner,    defaultHour: 19)
             }
+            .listRowBackground(Color.istsehCard)
 
             Section(
                 footer: Text("Changes save automatically. Medication reminders are refreshed when these times change.")
             ) {
                 EmptyView()
             }
+            .listRowBackground(Color.istsehCard)
         }
+        .scrollContentBackground(.hidden)
+        .background(Color.istsehPageBackground.ignoresSafeArea())
         .navigationTitle("Daily Routine")
         .navigationBarTitleDisplayMode(.inline)
         .tint(Color.istsehGreen)

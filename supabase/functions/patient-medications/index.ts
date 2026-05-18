@@ -2,13 +2,57 @@ import { createClient } from "npm:@supabase/supabase-js@2";
 
 type MedicationPayload = {
   id?: string;
+  medication_id?: string | null;
   name?: string;
   dosage?: string;
   frequency_per_day?: number;
   frequency_hours?: number | null;
   dosage_times?: string[];
   is_prn?: boolean;
+  is_manual?: boolean;
   is_manual_schedule?: boolean;
+  medication_name?: string;
+  source_type?: string;
+  medication_form?: string | null;
+  strength_value?: number | null;
+  strength_unit?: string | null;
+  dose_amount?: number | null;
+  dose_amount_unit?: string | null;
+  dose_quantity?: number | null;
+  dose_unit?: string | null;
+  dose_quantity_unit?: string | null;
+  strength_amount?: number | null;
+  parsed_strength_unit?: string | null;
+  concentration_amount?: number | null;
+  concentration_unit?: string | null;
+  route?: string | null;
+  application_area?: string | null;
+  dose_display?: string | null;
+  food_rule_source?: string | null;
+  dose_details_source?: string | null;
+  is_dose_auto_filled?: boolean;
+  dose_details_confirmed_by_user?: boolean;
+  schedule_mode?: string;
+  times_per_day?: number | null;
+  times_per_week?: number | null;
+  selected_weekdays?: number[] | null;
+  interval_days?: number | null;
+  reminders_enabled?: boolean;
+  caregiver_reminders_enabled?: boolean | null;
+  visual_shape?: string | null;
+  visual_color?: string | null;
+  visual_background_color?: string | null;
+  refill_reminder_enabled?: boolean;
+  refill_current_supply?: number | null;
+  refill_supply_unit?: string | null;
+  refill_threshold_quantity?: number | null;
+  refill_estimated_runout_date?: string | null;
+  refill_reminder_date?: string | null;
+  refill_reminder_mode?: string | null;
+  refill_notes?: string | null;
+  custom_form_text?: string | null;
+  custom_unit_text?: string | null;
+  source_metadata?: string | null;
   start_date?: string;
   end_date?: string;
   notes?: string | null;
@@ -28,14 +72,14 @@ type AppointmentPayload = {
 
 type PatientMedicationRequest = {
   action?:
-    | "list"
-    | "save"
-    | "delete_medication"
-    | "archive_medication"
-    | "restore_medication"
-    | "list_appointments"
-    | "save_appointment"
-    | "delete_appointment";
+  | "list"
+  | "save"
+  | "delete_medication"
+  | "archive_medication"
+  | "restore_medication"
+  | "list_appointments"
+  | "save_appointment"
+  | "delete_appointment";
   device_token?: string;
   target_patient_id?: string;
   medication?: MedicationPayload;
@@ -86,6 +130,10 @@ function normalizeFoodRule(value: string | undefined | null) {
     case "beforefood": return "beforeFood";
     case "afterfood": return "afterFood";
     case "withfood": return "withFood";
+    case "avoidwithfood":
+    case "avoidfood": return "avoidWithFood";
+    case "notsure":
+    case "unknown": return "notSure";
     default: return "none";
   }
 }
@@ -94,6 +142,21 @@ function cleanList(value: string[] | undefined | null) {
   return (value ?? [])
     .map((item) => cleanText(item))
     .filter((item, index, arr) => item.length > 0 && arr.indexOf(item) === index);
+}
+
+function normalizeScheduleMode(value: string | undefined | null, isPrn: boolean) {
+  if (isPrn) return "as_needed";
+  const normalized = cleanText(value).toLowerCase();
+  switch (normalized) {
+    case "weekly":
+    case "specific_days":
+    case "every_x_days":
+    case "as_needed":
+    case "emergency_only":
+      return normalized;
+    default:
+      return "daily";
+  }
 }
 
 async function patientIdForDeviceToken(deviceToken: string) {
@@ -114,7 +177,7 @@ async function patientIdForDeviceToken(deviceToken: string) {
     console.error("Auth check failed:", error);
     return undefined;
   }
-  
+
   if (!data) return undefined;
 
   // If a device record exists and it has a revoked_at date, deny access.
@@ -256,13 +319,20 @@ async function saveMedication(patientId: string, medication: MedicationPayload) 
   const frequencyPerDay = Math.max(1, Math.min(6, Math.trunc(medication.frequency_per_day ?? 1)));
   const foodRule = normalizeFoodRule(medication.food_rule);
   const activeIngredients = cleanList(medication.active_ingredients ?? medication.ingredients);
+  const isPrn = medication.is_prn ?? false;
+  const scheduleMode = normalizeScheduleMode(medication.schedule_mode, isPrn);
+  const sourceType = cleanText(medication.source_type) || (medication.medication_id || medication.rxcui ? "identified" : "manual");
+  const refillReminderMode = cleanText(medication.refill_reminder_mode) === "automatic" ? "automatic" : null;
 
   if (!name || !dosage || !startDate || !endDate) {
     return json(400, { error: "Medication name, dosage, start date, and end date are required." });
   }
 
-  const medicationId = await medicationIdForName(name, foodRule, cleanText(medication.rxcui) || null, activeIngredients);
-  if (!medicationId) {
+  const medicationId = sourceType === "manual"
+    ? null
+    : cleanText(medication.medication_id) || await medicationIdForName(name, foodRule, cleanText(medication.rxcui) || null, activeIngredients);
+
+  if (sourceType !== "manual" && !medicationId) {
     return json(500, { error: `Medication '${name}' could not be found or created in the catalog.` });
   }
 
@@ -275,8 +345,51 @@ async function saveMedication(patientId: string, medication: MedicationPayload) 
     frequency_hours: medication.frequency_hours ?? null,
     food_rule: foodRule,
     dosage_times: medication.dosage_times ?? [],
-    is_prn: medication.is_prn ?? false,
+    is_prn: isPrn,
+    is_manual: sourceType === "manual" || medication.is_manual === true,
     is_manual_schedule: medication.is_manual_schedule ?? false,
+    medication_name: cleanText(medication.medication_name) || name,
+    source_type: sourceType === "manual" ? "manual" : "identified",
+    medication_form: cleanText(medication.medication_form) || null,
+    strength_value: medication.strength_value ?? null,
+    strength_unit: cleanText(medication.strength_unit) || null,
+    dose_amount: medication.dose_amount ?? null,
+    dose_amount_unit: cleanText(medication.dose_amount_unit) || null,
+    dose_quantity: medication.dose_quantity ?? null,
+    dose_unit: cleanText(medication.dose_unit) || null,
+    dose_quantity_unit: cleanText(medication.dose_quantity_unit) || null,
+    strength_amount: medication.strength_amount ?? medication.strength_value ?? null,
+    parsed_strength_unit: cleanText(medication.parsed_strength_unit) || cleanText(medication.strength_unit) || null,
+    concentration_amount: medication.concentration_amount ?? null,
+    concentration_unit: cleanText(medication.concentration_unit) || null,
+    route: cleanText(medication.route) || null,
+    application_area: cleanText(medication.application_area) || null,
+    dose_display: cleanText(medication.dose_display) || dosage,
+    food_rule_source: cleanText(medication.food_rule_source) || null,
+    dose_details_source: cleanText(medication.dose_details_source) || null,
+    is_dose_auto_filled: medication.is_dose_auto_filled ?? false,
+    dose_details_confirmed_by_user: medication.dose_details_confirmed_by_user ?? false,
+    schedule_mode: scheduleMode,
+    times_per_day: medication.times_per_day ?? (scheduleMode === "daily" ? frequencyPerDay : null),
+    times_per_week: medication.times_per_week ?? null,
+    selected_weekdays: medication.selected_weekdays ?? [],
+    interval_days: medication.interval_days ?? null,
+    reminders_enabled: isPrn ? false : medication.reminders_enabled ?? true,
+    caregiver_reminders_enabled: medication.caregiver_reminders_enabled ?? null,
+    visual_shape: cleanText(medication.visual_shape) || null,
+    visual_color: cleanText(medication.visual_color) || null,
+    visual_background_color: cleanText(medication.visual_background_color) || null,
+    refill_reminder_enabled: medication.refill_reminder_enabled ?? false,
+    refill_current_supply: medication.refill_current_supply ?? null,
+    refill_supply_unit: cleanText(medication.refill_supply_unit) || null,
+    refill_threshold_quantity: medication.refill_threshold_quantity ?? null,
+    refill_estimated_runout_date: cleanDate(medication.refill_estimated_runout_date ?? undefined),
+    refill_reminder_date: cleanText(medication.refill_reminder_date) || null,
+    refill_reminder_mode: refillReminderMode,
+    refill_notes: cleanText(medication.refill_notes) || null,
+    custom_form_text: cleanText(medication.custom_form_text) || null,
+    custom_unit_text: cleanText(medication.custom_unit_text) || null,
+    source_metadata: null,
     start_date: startDate,
     end_date: endDate,
     notes: cleanText(medication.notes) || null,

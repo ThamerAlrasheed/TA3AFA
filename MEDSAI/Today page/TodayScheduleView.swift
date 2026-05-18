@@ -31,14 +31,22 @@ struct TodayScheduleView: View {
                 Section(header: Text(sectionTitle())) {
                     appointmentsSection
                 }
+                .listRowBackground(Color.istsehCard)
 
                 // MARK: Doses section
                 Section {
                     dosesSection
                 }
+                .listRowBackground(Color.istsehCard)
             }
             .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(Color.istsehPageBackground.ignoresSafeArea())
             .navigationTitle("Today")
+            .refreshable {
+                medsRepo.start()
+                apptsRepo.start()
+            }
             .toolbar {
                 if settings.role == .caregiver {
                     ToolbarItem(placement: .topBarLeading) {
@@ -91,16 +99,18 @@ struct TodayScheduleView: View {
     @ViewBuilder
     private var appointmentsSection: some View {
         if apptsRepo.isLoading {
-            HStack { ProgressView(); Text("Loading appointments…") }
+            BrandedLoadingView(message: LoadingMessage.appointments.text, style: .inline)
         } else if let err = apptsRepo.errorMessage {
-            ContentUnavailableView("Couldn't load appointments",
+            ContentUnavailableView(LoadingMessage.scheduleError.text,
                                    systemImage: "exclamationmark.triangle",
                                    description: Text(err))
         } else {
             let items = apptsRepo.appointments(on: today).sorted(by: { $0.date < $1.date })
             if items.isEmpty {
-                ContentUnavailableView("No appointments today",
-                                       systemImage: "calendar.badge.clock")
+                ISTSEHInlineEmptyState(
+                    systemImage: "calendar.badge.clock",
+                    title: LoadingMessage.noAppointmentsToday.text
+                )
             } else {
                 ForEach(items) { appt in
                     TodayRow(
@@ -122,14 +132,16 @@ struct TodayScheduleView: View {
     @ViewBuilder
     private var dosesSection: some View {
         if medsRepo.isLoading {
-            HStack { ProgressView(); Text("Loading medications…") }
+            BrandedLoadingView(message: LoadingMessage.medications.text, style: .inline)
         } else if let err = medsRepo.errorMessage {
-            ContentUnavailableView("Couldn't load medications",
+            ContentUnavailableView(LoadingMessage.scheduleError.text,
                                    systemImage: "exclamationmark.triangle",
                                    description: Text(err))
         } else if todaysDoses.isEmpty {
-            ContentUnavailableView("No doses scheduled today",
-                                   systemImage: "pills")
+            ISTSEHInlineEmptyState(
+                systemImage: "pills.fill",
+                title: LoadingMessage.noMedicationsDueToday.text
+            )
         } else {
             ForEach(todaysDoses.indices, id: \.self) { i in
                 let (time, med) = todaysDoses[i]
@@ -138,8 +150,9 @@ struct TodayScheduleView: View {
                 TodayRow(
                     isDone: completedDoseKeys.contains(key),
                     leadingIcon: "💊",
-                    title: med.name,
-                    subtitle: "\(med.dosage) • \(med.frequencyPerDay)x/day • \(med.foodRule.label)",
+                    medication: med,
+                    title: med.doseActionText(isArabic: isArabic),
+                    subtitle: medicationSubtitle(med),
                     timeText: time.formatted(date: .omitted, time: .shortened),
                     toggle: {
                         toggleDose(key, medID: med.id, time: time)
@@ -186,47 +199,49 @@ struct TodayScheduleView: View {
         // Day-overlap: treat meds starting later today as active today
         let active = medsRepo.meds.filter { med in
             guard !med.isArchived else { return false }
-            return med.startDate < dayEnd && med.endDate >= dayStart
+            return med.startDate < dayEnd && med.endDate >= dayStart && med.isScheduled(on: dayStart, calendar: cal)
         }
         guard !active.isEmpty else {
             todaysDoses = []
             return
         }
 
-        // Adapt LocalMed -> Medication (keep SAME IDs)
-        let adapted: [Medication] = active.map { m in
-            Medication(
-                id: m.id,
-                name: m.name,
-                dosage: m.dosage,
-                frequencyPerDay: m.frequencyPerDay,
-                startDate: m.startDate,
-                endDate: m.endDate,
-                foodRule: m.foodRule,
-                notes: m.notes,
-                ingredients: m.ingredients,
-                minIntervalHours: m.minIntervalHours,
-                rxcui: m.rxcui,
-                dosageTimes: m.dosageTimes,
-                asNeeded: m.asNeeded
-            )
-        }
-
-        // Filter out asNeeded for automatic adherence schedule generation
-        let scheduled = adapted.filter { !$0.asNeeded }
-
-        let pairs = Scheduler.buildAdherenceSchedule(
-            meds: scheduled,
-            settings: settings,
-            date: dayStart
-        )
-
-        // Map back to LocalMed for display, filtering to today (incl. sleeping window)
-        let byId: [String: LocalMed] = Dictionary(uniqueKeysWithValues: active.map { ($0.id, $0) })
-        todaysDoses = pairs
+        todaysDoses = active
+            .flatMap { med in doseDates(for: med, on: dayStart).map { ($0, med) } }
             .filter { (t, _) in t >= dayStart && t < nextWake }
-            .compactMap { (t, med) in byId[med.id].map { (t, $0) } }
             .sorted { $0.0 < $1.0 }
+        #if DEBUG
+        print("decoded visual fields on Today dose generation: \(todaysDoses.map { "\($0.1.name) visual=(\($0.1.visualShape ?? "nil"),\($0.1.visualColor ?? "nil"),\($0.1.visualBackgroundColor ?? "nil")) fallback=\($0.1.visualShape == nil || $0.1.visualColor == nil || $0.1.visualBackgroundColor == nil) refill=(enabled:\($0.1.refillReminderEnabled),date:\($0.1.refillReminderDate != nil))" })")
+        #endif
+    }
+
+    private func doseDates(for med: LocalMed, on date: Date) -> [Date] {
+        let cal = Calendar.current
+        let base = cal.startOfDay(for: date)
+        let explicitTimes = med.dosageTimes.compactMap { timeString -> Date? in
+            let parts = timeString.split(separator: ":")
+            guard parts.count >= 2, let hour = Int(parts[0]), let minute = Int(parts[1]) else { return nil }
+            return cal.date(bySettingHour: hour, minute: minute, second: 0, of: base)
+        }
+        if !explicitTimes.isEmpty { return explicitTimes }
+
+        let adapted = Medication(
+            id: med.id,
+            name: med.name,
+            dosage: med.dosage,
+            frequencyPerDay: med.frequencyPerDay,
+            startDate: med.startDate,
+            endDate: med.endDate,
+            foodRule: med.foodRule,
+            notes: med.notes,
+            ingredients: med.ingredients,
+            minIntervalHours: med.minIntervalHours,
+            rxcui: med.rxcui,
+            dosageTimes: nil,
+            asNeeded: med.asNeeded,
+            isManualSchedule: med.isManualSchedule
+        )
+        return Scheduler.preferredTimes(for: adapted, on: base, settings: settings)
     }
 
     // MARK: - Completion toggles
@@ -305,8 +320,21 @@ struct TodayScheduleView: View {
         case .beforeFood: return "Before food"
         case .afterFood:  return "After food"
         case .withFood:   return "With food"
+        case .avoidWithFood: return "Avoid with food"
+        case .notSure: return "Not sure"
         case .none:       return "No food rule"
         }
+    }
+
+    private func medicationSubtitle(_ med: LocalMed) -> String {
+        let food = MedicationFormRules.shouldShowFoodTiming(
+            formID: med.medicationForm,
+            foodRule: med.foodRule,
+            sourceBacked: med.foodRuleSource == "source"
+        ) ? med.foodRuleLabel(isArabic: isArabic) : nil
+        return [med.scheduleSummary(isArabic: isArabic), food]
+            .compactMap { $0 }
+            .joined(separator: " • ")
     }
 
     private func timeOnly(_ date: Date) -> String {
@@ -315,7 +343,11 @@ struct TodayScheduleView: View {
 
     /// Stable unique key for a dose row (per med per time)
     private func doseKey(time: Date, medID: String) -> String {
-        "\(medID)_\(Int(time.timeIntervalSince1970))"
+        NotificationsManager.medicationDoseKey(medID: medID, scheduledAt: time)
+    }
+
+    private var isArabic: Bool {
+        UserDefaults.standard.string(forKey: "appearance.language") == "ar"
     }
 }
 
@@ -323,6 +355,7 @@ struct TodayScheduleView: View {
 private struct TodayRow: View {
     let isDone: Bool
     let leadingIcon: String
+    var medication: LocalMed? = nil
     let title: String
     let subtitle: String
     let timeText: String
@@ -339,7 +372,15 @@ private struct TodayRow: View {
             }
             .buttonStyle(.plain)
 
-            if !leadingIcon.isEmpty {
+            if let medication {
+                MedicationVisualView(
+                    form: medication.medicationForm,
+                    shapeID: medication.visualShape,
+                    medicationColorID: medication.visualColor,
+                    backgroundColorID: medication.visualBackgroundColor,
+                    size: 38
+                )
+            } else if !leadingIcon.isEmpty {
                 Text(leadingIcon)
             }
 

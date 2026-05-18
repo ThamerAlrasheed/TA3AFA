@@ -1,6 +1,12 @@
 import Foundation
 import Supabase
 
+enum ActiveCareContext: Equatable {
+    case selfUser(userId: UUID)
+    case managedPatient(patientId: UUID, caregiverUserId: UUID)
+    case linkedPatient(patientId: UUID, deviceSessionId: String)
+}
+
 /// Central manager for all PostgreSQL interactions via Supabase.
 /// Replace the placeholder URL and key with your actual Supabase credentials.
 final class SupabaseManager {
@@ -82,13 +88,57 @@ final class SupabaseManager {
 
     private struct PatientMedicationPayload: Encodable {
         let id: String
+        let medicationID: String?
         let name: String
         let dosage: String
         let frequencyPerDay: Int
         let frequencyHours: Int?
         let dosageTimes: [String]
         let isPrn: Bool
+        let isManual: Bool
         let isManualSchedule: Bool
+        let medicationName: String
+        let sourceType: String
+        let medicationForm: String?
+        let strengthValue: Double?
+        let strengthUnit: String?
+        let doseAmount: Double?
+        let doseAmountUnit: String?
+        let doseQuantity: Double?
+        let doseUnit: String?
+        let doseQuantityUnit: String?
+        let strengthAmount: Double?
+        let parsedStrengthUnit: String?
+        let concentrationAmount: Double?
+        let concentrationUnit: String?
+        let route: String?
+        let applicationArea: String?
+        let doseDisplay: String?
+        let foodRuleSource: String?
+        let doseDetailsSource: String?
+        let isDoseAutoFilled: Bool
+        let doseDetailsConfirmedByUser: Bool
+        let scheduleMode: String
+        let timesPerDay: Int?
+        let timesPerWeek: Int?
+        let selectedWeekdays: [Int]?
+        let intervalDays: Int?
+        let remindersEnabled: Bool
+        let caregiverRemindersEnabled: Bool?
+        let visualShape: String?
+        let visualColor: String?
+        let visualBackgroundColor: String?
+        let refillReminderEnabled: Bool
+        let refillCurrentSupply: Double?
+        let refillSupplyUnit: String?
+        let refillThresholdQuantity: Double?
+        let refillEstimatedRunoutDate: String?
+        let refillReminderDate: String?
+        let refillReminderMode: String?
+        let refillNotes: String?
+        let customFormText: String?
+        let customUnitText: String?
+        let sourceMetadata: String?
         let startDate: String
         let endDate: String
         let notes: String?
@@ -98,13 +148,57 @@ final class SupabaseManager {
 
         enum CodingKeys: String, CodingKey {
             case id
+            case medicationID = "medication_id"
             case name
             case dosage
             case frequencyPerDay = "frequency_per_day"
             case frequencyHours = "frequency_hours"
             case dosageTimes = "dosage_times"
             case isPrn = "is_prn"
+            case isManual = "is_manual"
             case isManualSchedule = "is_manual_schedule"
+            case medicationName = "medication_name"
+            case sourceType = "source_type"
+            case medicationForm = "medication_form"
+            case strengthValue = "strength_value"
+            case strengthUnit = "strength_unit"
+            case doseAmount = "dose_amount"
+            case doseAmountUnit = "dose_amount_unit"
+            case doseQuantity = "dose_quantity"
+            case doseUnit = "dose_unit"
+            case doseQuantityUnit = "dose_quantity_unit"
+            case strengthAmount = "strength_amount"
+            case parsedStrengthUnit = "parsed_strength_unit"
+            case concentrationAmount = "concentration_amount"
+            case concentrationUnit = "concentration_unit"
+            case route
+            case applicationArea = "application_area"
+            case doseDisplay = "dose_display"
+            case foodRuleSource = "food_rule_source"
+            case doseDetailsSource = "dose_details_source"
+            case isDoseAutoFilled = "is_dose_auto_filled"
+            case doseDetailsConfirmedByUser = "dose_details_confirmed_by_user"
+            case scheduleMode = "schedule_mode"
+            case timesPerDay = "times_per_day"
+            case timesPerWeek = "times_per_week"
+            case selectedWeekdays = "selected_weekdays"
+            case intervalDays = "interval_days"
+            case remindersEnabled = "reminders_enabled"
+            case caregiverRemindersEnabled = "caregiver_reminders_enabled"
+            case visualShape = "visual_shape"
+            case visualColor = "visual_color"
+            case visualBackgroundColor = "visual_background_color"
+            case refillReminderEnabled = "refill_reminder_enabled"
+            case refillCurrentSupply = "refill_current_supply"
+            case refillSupplyUnit = "refill_supply_unit"
+            case refillThresholdQuantity = "refill_threshold_quantity"
+            case refillEstimatedRunoutDate = "refill_estimated_runout_date"
+            case refillReminderDate = "refill_reminder_date"
+            case refillReminderMode = "refill_reminder_mode"
+            case refillNotes = "refill_notes"
+            case customFormText = "custom_form_text"
+            case customUnitText = "custom_unit_text"
+            case sourceMetadata = "source_metadata"
             case startDate = "start_date"
             case endDate = "end_date"
             case notes
@@ -232,6 +326,38 @@ final class SupabaseManager {
                           userInfo: [NSLocalizedDescriptionKey: "User is not signed in."])
         }
         return id
+    }
+
+    func resolveActiveCareContext() -> ActiveCareContext? {
+        if let caregiverID = authenticatedUserID {
+            if let patientID = activePatientID {
+                return .managedPatient(patientId: patientID, caregiverUserId: caregiverID)
+            }
+            return .selfUser(userId: caregiverID)
+        }
+
+        if let patientID = patientUserID, let token = patientDeviceToken, !token.isEmpty {
+            return .linkedPatient(patientId: patientID, deviceSessionId: token)
+        }
+
+        return nil
+    }
+
+    func clearStoredCareContext() {
+        do {
+            try PatientSessionStore.shared.setActivePatientID(nil)
+            try PatientSessionStore.shared.setActivePatientName(nil)
+        } catch {
+            print("Patient context cleanup failed: \(error.localizedDescription)")
+        }
+    }
+
+    func clearCareCodeSession() {
+        do {
+            try PatientSessionStore.shared.clearPatientSession()
+        } catch {
+            print("Care-code session cleanup failed: \(error.localizedDescription)")
+        }
     }
 
     // MARK: - Retry Logic
@@ -446,13 +572,57 @@ final class SupabaseManager {
 
         let payload = PatientMedicationPayload(
             id: med.id,
+            medicationID: med.sourceType == .identified ? med.catalogId : nil,
             name: med.name,
             dosage: med.dosage,
             frequencyPerDay: med.frequencyPerDay,
             frequencyHours: med.minIntervalHours,
             dosageTimes: med.dosageTimes,
             isPrn: med.asNeeded,
+            isManual: med.sourceType == .manual,
             isManualSchedule: med.isManualSchedule,
+            medicationName: med.name,
+            sourceType: med.sourceType.rawValue,
+            medicationForm: med.medicationForm,
+            strengthValue: med.strengthValue,
+            strengthUnit: med.strengthUnit,
+            doseAmount: med.doseAmount,
+            doseAmountUnit: med.doseAmountUnit,
+            doseQuantity: med.doseQuantity,
+            doseUnit: med.doseUnit,
+            doseQuantityUnit: med.doseQuantityUnit,
+            strengthAmount: med.strengthAmount,
+            parsedStrengthUnit: med.parsedStrengthUnit,
+            concentrationAmount: med.concentrationAmount,
+            concentrationUnit: med.concentrationUnit,
+            route: med.route,
+            applicationArea: med.applicationArea,
+            doseDisplay: med.doseDisplay,
+            foodRuleSource: med.foodRuleSource,
+            doseDetailsSource: med.doseDetailsSource,
+            isDoseAutoFilled: med.isDoseAutoFilled,
+            doseDetailsConfirmedByUser: med.doseDetailsConfirmedByUser,
+            scheduleMode: med.scheduleMode.storageValue,
+            timesPerDay: med.timesPerDay,
+            timesPerWeek: med.timesPerWeek,
+            selectedWeekdays: med.selectedWeekdays.isEmpty ? nil : med.selectedWeekdays,
+            intervalDays: med.intervalDays,
+            remindersEnabled: med.remindersEnabled,
+            caregiverRemindersEnabled: med.caregiverRemindersEnabled,
+            visualShape: med.visualShape,
+            visualColor: med.visualColor,
+            visualBackgroundColor: med.visualBackgroundColor,
+            refillReminderEnabled: med.refillReminderEnabled,
+            refillCurrentSupply: med.refillCurrentSupply,
+            refillSupplyUnit: med.refillSupplyUnit,
+            refillThresholdQuantity: med.refillThresholdQuantity,
+            refillEstimatedRunoutDate: dateOnlyString(med.refillEstimatedRunoutDate),
+            refillReminderDate: dateTimeString(med.refillReminderDate),
+            refillReminderMode: med.refillReminderMode,
+            refillNotes: normalizedNotes(med.refillNotes),
+            customFormText: med.customFormText,
+            customUnitText: med.customUnitText,
+            sourceMetadata: med.sourceMetadata,
             startDate: formatter.string(from: med.startDate),
             endDate: formatter.string(from: med.endDate),
             notes: normalizedNotes(med.notes),
@@ -460,6 +630,10 @@ final class SupabaseManager {
             rxcui: med.rxcui,
             ingredients: med.ingredients
         )
+
+        #if DEBUG
+        debugPatientMedicationSaveStarted(med, requestContext: requestContext)
+        #endif
 
         let _: PatientMedicationFunctionResponse = try await invokePatientMedicationFunction(
             PatientMedicationRequest(
@@ -590,7 +764,17 @@ final class SupabaseManager {
                     print("⚠️ Patient session revoked/expired (401).")
                     Task { @MainActor in onSessionExpired?() }
                 }
-                
+
+                #if DEBUG
+                let responseBody = String(data: data, encoding: .utf8) ?? "<non-utf8 response body>"
+                print("""
+                ⚠️ patient-medications Edge Function failed
+                endpoint/table/EdgeFunction: patient-medications
+                httpStatusCode: \(code)
+                decodedResponseBody: \(responseBody)
+                """)
+                #endif
+
                 if let decoded = try? JSONDecoder().decode(FunctionErrorResponse.self, from: data) {
                     throw NSError(
                         domain: "SupabaseManager",
@@ -606,6 +790,14 @@ final class SupabaseManager {
                     userInfo: [NSLocalizedDescriptionKey: body ?? "The patient-medications function request failed."]
                 )
             case .relayError:
+                #if DEBUG
+                print("""
+                ⚠️ patient-medications Edge Function relay error
+                endpoint/table/EdgeFunction: patient-medications
+                httpStatusCode: unavailable
+                decodedResponseBody: relayError
+                """)
+                #endif
                 throw NSError(
                     domain: "SupabaseManager",
                     code: 502,
@@ -621,9 +813,95 @@ final class SupabaseManager {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    private func dateOnlyString(_ date: Date?) -> String? {
+        guard let date else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate]
+        return formatter.string(from: date)
+    }
+
+    private func dateTimeString(_ date: Date?) -> String? {
+        guard let date else { return nil }
+        return ISO8601DateFormatter().string(from: date)
+    }
+
+    #if DEBUG
+    private func debugPatientMedicationSaveStarted(
+        _ med: LocalMed,
+        requestContext: (deviceToken: String?, targetPatientID: String?)
+    ) {
+        let medicationNamePresent = !med.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let strengthText = "\(med.strengthValue.map { String($0) } ?? "nil") \(med.strengthUnit ?? "nil")"
+        let doseText = "\(med.doseQuantity.map { String($0) } ?? "nil") \(med.doseUnit ?? "nil")"
+        var lines: [String] = []
+        lines.append("patient-medications save started")
+        lines.append("selectedContext: \(debugActiveCareContextLabel())")
+        lines.append("auth.uid: \(authenticatedUserID?.uuidString.lowercased() ?? "nil")")
+        lines.append("activePatientID: \(activePatientID?.uuidString.lowercased() ?? "nil")")
+        lines.append("careCodeActive: \(isPatientMode)")
+        lines.append("targetPatientIDPresent: \(requestContext.targetPatientID != nil)")
+        lines.append("deviceTokenPresent: \(requestContext.deviceToken != nil)")
+        lines.append("medicationNamePresent: \(medicationNamePresent)")
+        lines.append("medicationIdPresent: \(med.catalogId != nil)")
+        lines.append("isManual: \(med.sourceType == .manual)")
+        lines.append("sourceType: \(med.sourceType.rawValue)")
+        lines.append("medicationForm: \(med.medicationForm ?? "nil")")
+        lines.append("strength: \(strengthText)")
+        lines.append("dose: \(doseText)")
+        lines.append("doseDisplay: \(med.doseDisplay ?? "nil")")
+        lines.append("doseDetailsSource: \(med.doseDetailsSource ?? "nil") autoFilled=\(med.isDoseAutoFilled) confirmed=\(med.doseDetailsConfirmedByUser)")
+        lines.append("scheduleMode: \(med.scheduleMode.storageValue)")
+        lines.append("selectedWeekdays: \(med.selectedWeekdays)")
+        lines.append("isPRN/asNeeded: \(med.asNeeded || med.scheduleMode.isPRN)")
+        lines.append("doseTimes: \(med.dosageTimes)")
+        lines.append("doseTimesCount: \(med.dosageTimes.count)")
+        lines.append("foodRule: \(med.foodRule.rawValue)")
+        lines.append("startDate: \(debugDate(med.startDate))")
+        lines.append("endDatePresent: true")
+        lines.append("remindersEnabled: \(med.remindersEnabled)")
+        lines.append("visualShape: \(med.visualShape ?? "nil")")
+        lines.append("visualColor: \(med.visualColor ?? "nil")")
+        lines.append("visualBackgroundColor: \(med.visualBackgroundColor ?? "nil")")
+        lines.append("visualFieldsPresent: \(med.visualShape != nil && med.visualColor != nil && med.visualBackgroundColor != nil)")
+        lines.append("refill_enabled: \(med.refillReminderEnabled)")
+        lines.append("refill_current_supply present: \(med.refillCurrentSupply != nil)")
+        lines.append("refill_threshold present: \(med.refillThresholdQuantity != nil)")
+        lines.append("refill_reminder_mode: \(med.refillReminderMode ?? "nil")")
+        lines.append("refill_reminder_date present: \(med.refillReminderDate != nil)")
+        lines.append("payloadKeys: action,device_token,target_patient_id,medication(id,medication_id,name,dosage,frequency_per_day,frequency_hours,dosage_times,is_prn,is_manual,is_manual_schedule,medication_name,source_type,medication_form,strength_value,strength_unit,dose_amount,dose_amount_unit,dose_quantity,dose_unit,dose_quantity_unit,strength_amount,parsed_strength_unit,concentration_amount,concentration_unit,route,application_area,dose_display,food_rule_source,dose_details_source,is_dose_auto_filled,dose_details_confirmed_by_user,schedule_mode,times_per_day,times_per_week,selected_weekdays,interval_days,reminders_enabled,caregiver_reminders_enabled,visual_shape,visual_color,visual_background_color,refill_reminder_enabled,refill_current_supply,refill_supply_unit,refill_threshold_quantity,refill_estimated_runout_date,refill_reminder_date,refill_reminder_mode,refill_notes,custom_form_text,custom_unit_text,source_metadata,start_date,end_date,notes,food_rule,rxcui,ingredients)")
+        lines.append("endpoint/table/EdgeFunction: patient-medications")
+        print(lines.joined(separator: "\n"))
+    }
+
+    private func debugActiveCareContextLabel() -> String {
+        switch resolveActiveCareContext() {
+        case let .selfUser(userId):
+            return "self user \(userId.uuidString.lowercased())"
+        case let .managedPatient(patientId, caregiverUserId):
+            return "managed patient \(patientId.uuidString.lowercased()) caregiver \(caregiverUserId.uuidString.lowercased())"
+        case let .linkedPatient(patientId, _):
+            return "linked patient \(patientId.uuidString.lowercased())"
+        case .none:
+            return "none"
+        }
+    }
+
+    private func debugDate(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withFullDate]
+        return formatter.string(from: date)
+    }
+    #endif
+
     // MARK: - Dose Events
 
-    func recordDoseEvent(medId: String, scheduledAt: Date, status: DoseStatus) async throws {
+    func recordDoseEvent(
+        medId: String,
+        scheduledAt: Date,
+        status: DoseStatus,
+        patientID explicitPatientID: UUID? = nil,
+        source explicitSource: String? = nil
+    ) async throws {
         guard let uid = currentUserID else { return }
         guard let medUUID = UUID(uuidString: medId) else {
             print("⚠️ Cannot record dose event: Invalid medId UUID: \(medId)")
@@ -644,8 +922,9 @@ final class SupabaseManager {
         let isoFmt = ISO8601DateFormatter()
         isoFmt.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
 
-        // patient_id is always the current context's patient
-        let patientId = (isPatientMode ? patientUserID : activePatientID) ?? uid
+        // Notification actions may run after the user has switched context, so
+        // prefer the patient ID encoded in the notification payload.
+        let patientId = explicitPatientID ?? (isPatientMode ? patientUserID : activePatientID) ?? uid
         
         let row = DoseEventRow(
             id: UUID(),
@@ -655,7 +934,7 @@ final class SupabaseManager {
             status: status.rawValue,
             taken_at: status == .taken ? isoFmt.string(from: Date()) : nil,
             recorded_by: uid, // The actual person logged in
-            source: isPatientMode ? "patient" : "caregiver"
+            source: explicitSource ?? (isPatientMode ? "patient" : "caregiver")
         )
 
         try await client
