@@ -10,6 +10,9 @@ struct MedListView: View {
     @EnvironmentObject var settings: AppSettings
     @EnvironmentObject private var repo: UserMedsRepo
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("appearance.language") private var languageCode: String = "en"
+
+    private var isArabic: Bool { languageCode == "ar" }
 
     @State private var showingAdd = false
     @State private var analyzedPayload: DrugPayload? = nil
@@ -201,7 +204,6 @@ struct MedListView: View {
                 .presentationDetents([.medium, .large])
             }
 
-
             // Delete confirmation
             .alert("Delete this medication?",
                    isPresented: .constant(toDelete != nil),
@@ -224,6 +226,7 @@ struct MedListView: View {
                 }
             }
         }
+        .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
     }
 
     private func openCamera() {
@@ -305,12 +308,16 @@ private struct CameraAccessAlert: Identifiable {
 // MARK: - Row extracted to avoid complex type-checking
 private struct MedRowView: View {
     @EnvironmentObject var settings: AppSettings
+    @Environment(\.layoutDirection) private var layoutDirection
+
     let med: LocalMed
     let warnings: [SafetyWarning]
     let onEdit: () -> Void
     let onInfo: () -> Void
     let onDelete: () -> Void
     let onWarningTap: (SafetyWarning) -> Void
+
+    private var isRTL: Bool { layoutDirection == .rightToLeft }
 
     var body: some View {
         let sortedWarnings = SafetyWarningPresentation.sorted(warnings)
@@ -324,7 +331,7 @@ private struct MedRowView: View {
                 size: 46
             )
 
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: isRTL ? .trailing : .leading, spacing: 5) {
                 Text(med.name).font(.headline)
                 let isArabic = UserDefaults.standard.string(forKey: "appearance.language") == "ar"
                 let foodVisible = MedicationFormRules.shouldShowFoodTiming(formID: med.medicationForm, foodRule: med.foodRule, sourceBacked: med.foodRuleSource == "source")
@@ -334,6 +341,7 @@ private struct MedRowView: View {
                     foodVisible && !(med.scheduleMode.isPRN || med.asNeeded) ? med.foodRuleLabel(isArabic: isArabic) : nil
                 ].compactMap { $0 }.joined(separator: " • ")
                 Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
+                    .multilineTextAlignment(isRTL ? .trailing : .leading)
 
                 if let primaryWarning = sortedWarnings.first {
                     SafetyWarningBadge(

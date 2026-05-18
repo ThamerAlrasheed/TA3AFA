@@ -92,6 +92,7 @@ struct TodayScheduleView: View {
                     .presentationDetents([.medium, .large])
             }
         }
+        .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
     }
 
     // MARK: - Appointments UI
@@ -353,6 +354,8 @@ struct TodayScheduleView: View {
 
 // MARK: - Reusable "Today" row with a tick and tap
 private struct TodayRow: View {
+    @Environment(\.layoutDirection) private var layoutDirection
+
     let isDone: Bool
     let leadingIcon: String
     var medication: LocalMed? = nil
@@ -361,6 +364,8 @@ private struct TodayRow: View {
     let timeText: String
     let toggle: () -> Void
     let onTap: () -> Void
+
+    private var isRTL: Bool { layoutDirection == .rightToLeft }
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -384,16 +389,18 @@ private struct TodayRow: View {
                 Text(leadingIcon)
             }
 
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: isRTL ? .trailing : .leading, spacing: 2) {
                 Text(title).font(.headline)
                     .strikethrough(isDone, color: .secondary)
                     .foregroundStyle(isDone ? .secondary : .primary)
+                    .multilineTextAlignment(isRTL ? .trailing : .leading)
 
                 if !subtitle.isEmpty {
                     Text(subtitle)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
+                        .multilineTextAlignment(isRTL ? .trailing : .leading)
                 }
             }
 

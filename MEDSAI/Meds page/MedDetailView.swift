@@ -17,7 +17,7 @@ struct MedDetailView: View {
             Color.istsehPageBackground.ignoresSafeArea()
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: isArabic ? .trailing : .leading, spacing: 16) {
                     if loading {
                         ISTSEHCard {
                             BrandedLoadingView(
@@ -37,15 +37,17 @@ struct MedDetailView: View {
                                     size: 58
                                 )
 
-                                VStack(alignment: .leading, spacing: 10) {
+                                VStack(alignment: isArabic ? .trailing : .leading, spacing: 10) {
                                     Text(med?.name ?? details?.displayName ?? medName)
                                         .font(.title.weight(.bold))
                                         .foregroundStyle(.primary)
                                         .fixedSize(horizontal: false, vertical: true)
+                                        .multilineTextAlignment(isArabic ? .trailing : .leading)
 
                                     Text(statusText)
                                         .font(.subheadline)
                                         .foregroundStyle(.secondary)
+                                        .multilineTextAlignment(isArabic ? .trailing : .leading)
                                 }
 
                                 Spacer(minLength: 0)
@@ -98,6 +100,7 @@ struct MedDetailView: View {
         .navigationTitle(headerTitle)
         .navigationBarTitleDisplayMode(.inline)
         .task { await load() }
+        .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
     }
 
     private func detailSection(title: String, bullets: [String]) -> some View {
@@ -108,7 +111,7 @@ struct MedDetailView: View {
 
     private func medicationPlanSection(_ med: LocalMed) -> some View {
         ISTSEHCard {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: isArabic ? .trailing : .leading, spacing: 12) {
                 Text(isArabic ? "خطة الدواء" : "Your medication plan")
                     .font(.headline)
 
@@ -141,7 +144,7 @@ struct MedDetailView: View {
 
     private func refillSection(_ med: LocalMed) -> some View {
         ISTSEHCard {
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: isArabic ? .trailing : .leading, spacing: 12) {
                 Text(isArabic ? "تذكير إعادة الصرف" : "Refill reminder")
                     .font(.headline)
 
@@ -317,19 +320,24 @@ private struct DetailStrengthScroll: View {
 }
 
 private struct DetailPlanRow: View {
+    @Environment(\.layoutDirection) private var layoutDirection
     let title: String
     let value: String
+
+    private var isRTL: Bool { layoutDirection == .rightToLeft }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             Text(title)
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
-                .frame(width: 96, alignment: .leading)
+                .frame(width: 96, alignment: isRTL ? .trailing : .leading)
+                .multilineTextAlignment(isRTL ? .trailing : .leading)
             Text(value)
                 .font(.subheadline)
                 .foregroundStyle(.primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: isRTL ? .trailing : .leading)
+                .multilineTextAlignment(isRTL ? .trailing : .leading)
         }
     }
 }

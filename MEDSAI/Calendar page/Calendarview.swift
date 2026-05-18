@@ -220,25 +220,30 @@ private struct MonthlyCalendar: View {
 
 // MARK: - Common Header
 private struct Header: View {
+    @Environment(\.layoutDirection) private var layoutDirection
+
     let title: String
     let onPrev: () -> Void
     let onNext: () -> Void
+
+    private var isRTL: Bool { layoutDirection == .rightToLeft }
 
     var body: some View {
         HStack {
             Text(title)
                 .font(.title3.weight(.semibold))
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .multilineTextAlignment(isRTL ? .trailing : .leading)
+                .frame(maxWidth: .infinity, alignment: isRTL ? .trailing : .leading)
 
             HStack(spacing: 12) {
                 Button(action: onPrev) {
-                    Image(systemName: "chevron.left")
+                    Image(systemName: isRTL ? "chevron.right" : "chevron.left")
                         .font(.headline)
                         .padding(8)
                         .contentShape(Rectangle())
                 }
                 Button(action: onNext) {
-                    Image(systemName: "chevron.right")
+                    Image(systemName: isRTL ? "chevron.left" : "chevron.right")
                         .font(.headline)
                         .padding(8)
                         .contentShape(Rectangle())

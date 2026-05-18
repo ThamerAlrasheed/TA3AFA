@@ -74,6 +74,7 @@ struct MedicalProfileView: View {
         .safeAreaInset(edge: .bottom) {
             saveBar
         }
+        .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
         .navigationTitle(MedicalProfileText.medicalProfile)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: profileContextKey) { await loadProfile() }
@@ -113,16 +114,22 @@ struct MedicalProfileView: View {
         }
     }
 
+    private var isArabic: Bool {
+        UserDefaults.standard.string(forKey: "appearance.language") == "ar"
+    }
+
     private var header: some View {
         ISTSEHCard {
             HStack(alignment: .top, spacing: 14) {
                 ISTSEHIconBadge(systemName: "heart.text.clipboard.fill")
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: isArabic ? .trailing : .leading, spacing: 6) {
                     Text(MedicalProfileText.medicalProfile)
                         .font(.title2.weight(.bold))
+                        .multilineTextAlignment(isArabic ? .trailing : .leading)
                     Text(patientName.isEmpty ? MedicalProfileText.selectAllThatApply : patientName)
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .multilineTextAlignment(isArabic ? .trailing : .leading)
                 }
                 Spacer()
             }

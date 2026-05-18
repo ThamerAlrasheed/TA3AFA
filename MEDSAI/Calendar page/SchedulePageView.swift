@@ -80,6 +80,7 @@ struct SchedulePageView: View {
                 AddAppointmentView(repo: appts, defaultDate: selectedDate, existing: appt)
             }
         }
+        .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
     }
 
     // MARK: - Appointments block (above doses)
@@ -122,22 +123,25 @@ struct SchedulePageView: View {
             } else {
                 VStack(spacing: 0) {
                     ForEach(items) { appt in
-                        VStack(alignment: .leading, spacing: 6) {
+                        VStack(alignment: isArabic ? .trailing : .leading, spacing: 6) {
                             HStack(alignment: .top, spacing: 12) {
-                                VStack(alignment: .leading, spacing: 2) {
+                                VStack(alignment: isArabic ? .trailing : .leading, spacing: 2) {
                                     Text(appt.titleWithEmoji)
                                         .font(.headline)
                                         .foregroundStyle(.primary)
+                                        .multilineTextAlignment(isArabic ? .trailing : .leading)
                                     if let loc = appt.location, !loc.isEmpty {
                                         Text(loc)
                                             .font(.subheadline)
                                             .foregroundStyle(.secondary)
+                                            .multilineTextAlignment(isArabic ? .trailing : .leading)
                                     }
                                     if let notes = appt.notes, !notes.isEmpty {
                                         Text(notes)
                                             .font(.subheadline)
                                             .foregroundStyle(.secondary)
                                             .lineLimit(2)
+                                            .multilineTextAlignment(isArabic ? .trailing : .leading)
                                     }
                                 }
 
@@ -162,7 +166,7 @@ struct SchedulePageView: View {
                                         Image(systemName: "ellipsis.circle")
                                             .font(.title3)
                                             .foregroundStyle(.secondary)
-                                            .padding(.leading, 4)
+                                            .padding(isArabic ? .trailing : .leading, 4)
                                             .contentShape(Rectangle())
                                     }
                                     .buttonStyle(.plain)
@@ -172,7 +176,7 @@ struct SchedulePageView: View {
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
 
-                        Divider().padding(.leading, 16)
+                        Divider().padding(isArabic ? .trailing : .leading, 16)
                     }
 
                     if canEditAppointments {
@@ -230,11 +234,13 @@ struct SchedulePageView: View {
                                 backgroundColorID: med.visualBackgroundColor,
                                 size: 40
                             )
-                            VStack(alignment: .leading, spacing: 2) {
+                            VStack(alignment: isArabic ? .trailing : .leading, spacing: 2) {
                                 Text(med.doseActionText(isArabic: isArabic)).font(.headline)
+                                    .multilineTextAlignment(isArabic ? .trailing : .leading)
                                 Text(medicationSubtitle(med))
                                     .font(.subheadline)
                                     .foregroundStyle(.secondary)
+                                    .multilineTextAlignment(isArabic ? .trailing : .leading)
                             }
                             Spacer()
                             Text(time.formatted(date: .omitted, time: .shortened))
@@ -244,7 +250,7 @@ struct SchedulePageView: View {
                         .padding(.horizontal, 16)
                         .padding(.vertical, 10)
 
-                        Divider().padding(.leading, 16)
+                        Divider().padding(isArabic ? .trailing : .leading, 16)
                     }
                 }
             }
@@ -347,11 +353,12 @@ struct SchedulePageView: View {
 
 // MARK: - Section chrome (List-like look without List)
 private struct SectionCard<Content: View>: View {
+    @Environment(\.layoutDirection) private var layoutDirection
     let content: Content
     init(@ViewBuilder content: () -> Content) { self.content = content() }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: layoutDirection == .rightToLeft ? .trailing : .leading, spacing: 0) {
             content
         }
         .background(Color.istsehCard)
@@ -366,10 +373,13 @@ private struct SectionCard<Content: View>: View {
 }
 
 private struct SectionHeader: View {
+    @Environment(\.layoutDirection) private var layoutDirection
     let title: String
     var body: some View {
         Text(title)
             .font(.headline)
+            .multilineTextAlignment(layoutDirection == .rightToLeft ? .trailing : .leading)
+            .frame(maxWidth: .infinity, alignment: layoutDirection == .rightToLeft ? .trailing : .leading)
             .padding(.horizontal, 16)
             .padding(.top, 12)
             .padding(.bottom, 8)

@@ -2,27 +2,43 @@ import SwiftUI
 
 // MARK: - Small reusable views
 struct InfoSection: View {
+    @Environment(\.layoutDirection) private var layoutDirection
     let title: String
     let bullets: [String]
+
+    private var isRTL: Bool { layoutDirection == .rightToLeft }
+
     var body: some View {
         let displayBullets = PatientLabelSanitizer.fallbackBullets(bullets, max: 4)
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: isRTL ? .trailing : .leading, spacing: 10) {
             Text(title.uppercased())
                 .font(.caption)
                 .bold()
                 .foregroundStyle(.secondary)
                 .tracking(1)
+                .multilineTextAlignment(isRTL ? .trailing : .leading)
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: isRTL ? .trailing : .leading, spacing: 8) {
                 ForEach(displayBullets.prefix(4), id: \.self) { line in
                     HStack(alignment: .top, spacing: 10) {
-                        Circle()
-                            .fill(Color.istsehGreen)
-                            .frame(width: 5, height: 5)
-                            .padding(.top, 7)
-                        Text(line)
-                            .font(.subheadline)
-                            .lineSpacing(2)
+                        if isRTL {
+                            Text(line)
+                                .font(.subheadline)
+                                .lineSpacing(2)
+                                .multilineTextAlignment(.trailing)
+                            Circle()
+                                .fill(Color.istsehGreen)
+                                .frame(width: 5, height: 5)
+                                .padding(.top, 7)
+                        } else {
+                            Circle()
+                                .fill(Color.istsehGreen)
+                                .frame(width: 5, height: 5)
+                                .padding(.top, 7)
+                            Text(line)
+                                .font(.subheadline)
+                                .lineSpacing(2)
+                        }
                     }
                 }
             }

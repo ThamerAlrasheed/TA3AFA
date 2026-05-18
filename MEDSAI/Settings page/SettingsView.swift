@@ -142,6 +142,7 @@ struct SettingsView: View {
                 NotificationCenter.default.post(name: NSNotification.Name("UserRoutineChanged"), object: nil)
             }
         }
+        .environment(\.layoutDirection, languageCode == "ar" ? .rightToLeft : .leftToRight)
     }
 
     // MARK: - Profile Header Card
@@ -301,7 +302,7 @@ struct SettingsView: View {
 
     private var preferencesSection: some View {
         Section("App Preferences") {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: languageCode == "ar" ? .trailing : .leading, spacing: 8) {
                 HStack(spacing: 10) {
                     SettingsIconBadge(systemName: "paintbrush.fill", color: Color.istsehGreen)
                     Text("Appearance")
@@ -314,7 +315,7 @@ struct SettingsView: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                .padding(.leading, 40)
+                .padding(languageCode == "ar" ? .trailing : .leading, 40)
             }
             .padding(.vertical, 4)
 
