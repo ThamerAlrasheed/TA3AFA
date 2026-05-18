@@ -4,6 +4,10 @@ import SwiftUI
 
 struct RoutineSettingsView: View {
     @EnvironmentObject var settings: AppSettings
+    @AppStorage("appearance.language") private var languageCode: String =
+        Locale.current.language.languageCode?.identifier ?? "en"
+
+    private var isArabic: Bool { languageCode == "ar" }
 
     var body: some View {
         Form {
@@ -31,6 +35,7 @@ struct RoutineSettingsView: View {
 
             Section(
                 footer: Text("Changes save automatically. Medication reminders are refreshed when these times change.")
+                    .multilineTextAlignment(isArabic ? .trailing : .leading)
             ) {
                 EmptyView()
             }
@@ -47,6 +52,7 @@ struct RoutineSettingsView: View {
         .overlay(alignment: .bottom) {
             RoutineSaveToast(status: settings.routineSaveStatus)
         }
+        .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
     }
 }
 

@@ -9,6 +9,10 @@ import SwiftUI
 struct AddAppointmentView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var repo: AppointmentsRepo
+    @AppStorage("appearance.language") private var languageCode: String =
+        Locale.current.language.languageCode?.identifier ?? "en"
+
+    private var isArabic: Bool { languageCode == "ar" }
 
     /// If non-nil, we are editing this appointment.
     let existing: Appointment?
@@ -99,6 +103,7 @@ struct AddAppointmentView: View {
                 }
             }
         }
+        .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
     }
 
     private func save() {

@@ -3,9 +3,13 @@ import Supabase
 
 struct FamilySettingsView: View {
     @EnvironmentObject var settings: AppSettings
+    @AppStorage("appearance.language") private var languageCode: String =
+        Locale.current.language.languageCode?.identifier ?? "en"
     @State private var showingAddMember = false
     @State private var isLoading = false
     @State private var patients: [PatientProfile] = []
+
+    private var isArabic: Bool { languageCode == "ar" }
     
     struct PatientProfile: Identifiable, Codable {
         let id: String
@@ -26,6 +30,7 @@ struct FamilySettingsView: View {
                 if patients.isEmpty && !isLoading {
                     Text("No family members connected yet.")
                         .foregroundStyle(.secondary)
+                        .multilineTextAlignment(isArabic ? .trailing : .leading)
                         .padding(.vertical, 8)
                 } else {
                     ForEach(patients) { patient in
@@ -40,7 +45,7 @@ struct FamilySettingsView: View {
                                     .foregroundStyle(Color.istsehGreen)
                                     .frame(width: 32)
 
-                                VStack(alignment: .leading, spacing: 4) {
+                                VStack(alignment: isArabic ? .trailing : .leading, spacing: 4) {
                                     Text(displayName(for: patient))
                                         .font(.headline)
 
@@ -77,9 +82,11 @@ struct FamilySettingsView: View {
                 }
             } footer: {
                 Text("Adding a family member allows you to manage their medications and schedule.")
+                    .multilineTextAlignment(isArabic ? .trailing : .leading)
             }
         }
         .navigationTitle("Family Members")
+        .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
         .sheet(isPresented: $showingAddMember) {
             AddFamilyMemberView { _ in
                 Task { await loadPatients() }
@@ -285,6 +292,8 @@ struct CareProfileMenu: View {
 
 struct ManagedPatientSettingsView: View {
     @EnvironmentObject var settings: AppSettings
+    @AppStorage("appearance.language") private var languageCode: String =
+        Locale.current.language.languageCode?.identifier ?? "en"
     @State var patient: FamilySettingsView.PatientProfile
     var onUpdate: () -> Void
     @Environment(\.dismiss) private var dismiss
@@ -295,6 +304,7 @@ struct ManagedPatientSettingsView: View {
     @State private var isSaving = false
     @State private var showRemoveConfirmation = false
 
+    private var isArabic: Bool { languageCode == "ar" }
     private var supabase: SupabaseManager { .shared }
 
     var body: some View {
@@ -347,6 +357,7 @@ struct ManagedPatientSettingsView: View {
                 Text("Transfer Care")
             } footer: {
                 Text("Transferring will move \(patient.firstName) to a new caregiver. You will lose access immediately.")
+                    .multilineTextAlignment(isArabic ? .trailing : .leading)
             }
 
             Section {
@@ -363,6 +374,7 @@ struct ManagedPatientSettingsView: View {
                 Text("Remove Access")
             } footer: {
                 Text("Removing \(patient.firstName) will stop showing their medications, appointments, and settings in your family list.")
+                    .multilineTextAlignment(isArabic ? .trailing : .leading)
             }
             
             if let msg = statusMessage {
@@ -370,10 +382,12 @@ struct ManagedPatientSettingsView: View {
                     Text(msg)
                         .font(.footnote)
                         .foregroundStyle(msg.contains("Success") ? Color.istsehGreen : .red)
+                        .multilineTextAlignment(isArabic ? .trailing : .leading)
                 }
             }
         }
         .navigationTitle("\(patient.firstName)'s Settings")
+        .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
         .disabled(isSaving)
         .alert("Remove \(patient.firstName)?", isPresented: $showRemoveConfirmation) {
             Button("Remove", role: .destructive) {
@@ -463,6 +477,8 @@ struct ManagedPatientSettingsView: View {
 struct AddFamilyMemberView: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var settings: AppSettings
+    @AppStorage("appearance.language") private var languageCode: String =
+        Locale.current.language.languageCode?.identifier ?? "en"
     @State private var firstName = ""
     @State private var lastName = ""
     @State private var dob = Date()
@@ -483,6 +499,7 @@ struct AddFamilyMemberView: View {
     
     var onSave: (String) -> Void
 
+    private var isArabic: Bool { languageCode == "ar" }
     private var supabase: SupabaseManager { .shared }
     
     var body: some View {
@@ -513,6 +530,7 @@ struct AddFamilyMemberView: View {
                         Text("This code expires in 72 hours.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                            .multilineTextAlignment(isArabic ? .trailing : .leading)
                         
                         Button("Copy Code") {
                             UIPasteboard.general.string = code
@@ -526,11 +544,11 @@ struct AddFamilyMemberView: View {
                 } else {
                     VStack(spacing: 16) {
                     ISTSEHCard {
-                        VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: isArabic ? .trailing : .leading, spacing: 12) {
                             Text("Patient Information")
                                 .font(.headline.weight(.semibold))
                                 .foregroundStyle(.primary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .frame(maxWidth: .infinity, alignment: isArabic ? .trailing : .leading)
 
                         TextField("First Name", text: $firstName)
                                 .textInputAutocapitalization(.words)
@@ -560,11 +578,11 @@ struct AddFamilyMemberView: View {
                         .padding(.vertical, 4)
                     
                     ISTSEHCard {
-                        VStack(alignment: .leading, spacing: 12) {
+                        VStack(alignment: isArabic ? .trailing : .leading, spacing: 12) {
                             Text("Initial Permissions")
                                 .font(.headline.weight(.semibold))
                                 .foregroundStyle(.primary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .frame(maxWidth: .infinity, alignment: isArabic ? .trailing : .leading)
 
                         Toggle("Can add medications", isOn: $canAddMeds)
                         Toggle("Can manage calendar", isOn: $canManageCalendar)
@@ -573,6 +591,7 @@ struct AddFamilyMemberView: View {
                         Text("These settings can be changed later in the patient's settings.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
+                                .multilineTextAlignment(isArabic ? .trailing : .leading)
                                 .padding(.top, 4)
                         }
                     }
@@ -607,6 +626,7 @@ struct AddFamilyMemberView: View {
                 }
             }
         }
+        .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
     }
     
     private func generateCode() async {

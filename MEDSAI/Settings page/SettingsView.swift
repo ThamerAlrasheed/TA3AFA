@@ -667,9 +667,13 @@ private struct ReminderSettingsView: View {
     @State private var notifyDoses: Bool = true
     @State private var notifyAppointments: Bool = true
     @State private var notifyCaregiverDoses: Bool = false
+    @AppStorage("appearance.language") private var languageCode: String =
+        Locale.current.language.languageCode?.identifier ?? "en"
     #if DEBUG
     @AppStorage("debug.showContextPanel") private var showDebugContextPanel = false
     #endif
+
+    private var isArabic: Bool { languageCode == "ar" }
 
     private var reminderContextKey: String {
         NotificationsManager.reminderContextKey()
@@ -679,6 +683,7 @@ private struct ReminderSettingsView: View {
         Form {
             Section(
                 footer: Text(footerText)
+                    .multilineTextAlignment(isArabic ? .trailing : .leading)
             ) {
                 Toggle(isOn: $notificationsEnabled) {
                     Label("Enable reminders", systemImage: "bell.fill")
@@ -740,6 +745,7 @@ private struct ReminderSettingsView: View {
                     Text("Developer Tests")
                 } footer: {
                     Text("DEBUG only. These buttons are not compiled into production builds.")
+                        .multilineTextAlignment(isArabic ? .trailing : .leading)
                 }
                 .listRowBackground(Color.istsehCard)
             }
@@ -753,6 +759,7 @@ private struct ReminderSettingsView: View {
         .task(id: reminderContextKey) {
             loadReminderSettings()
         }
+        .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
     }
 
     private var footerText: String {
@@ -780,22 +787,34 @@ private struct ReminderSettingsView: View {
 // MARK: - FAQ Screen
 
 private struct FAQView: View {
+    @AppStorage("appearance.language") private var languageCode: String =
+        Locale.current.language.languageCode?.identifier ?? "en"
+
+    private var isArabic: Bool { languageCode == "ar" }
+
     var body: some View {
         List {
             Section(header: Text("General")) {
                 Text("How do I add a medication?")
+                    .multilineTextAlignment(isArabic ? .trailing : .leading)
                 Text("How do I edit or delete a medication?")
+                    .multilineTextAlignment(isArabic ? .trailing : .leading)
             }
             Section(header: Text("Scheduling")) {
                 Text("How are dose times calculated?")
+                    .multilineTextAlignment(isArabic ? .trailing : .leading)
                 Text("How do food rules affect my schedule?")
+                    .multilineTextAlignment(isArabic ? .trailing : .leading)
             }
             Section(header: Text("Notifications")) {
                 Text("How can I change reminders?")
+                    .multilineTextAlignment(isArabic ? .trailing : .leading)
                 Text("Why didn't I receive a notification?")
+                    .multilineTextAlignment(isArabic ? .trailing : .leading)
             }
         }
         .navigationTitle("FAQ")
+        .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
     }
 }
 
