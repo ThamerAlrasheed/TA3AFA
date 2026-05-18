@@ -30,3 +30,4 @@ DerivedData/
 *.ipa
 *.dSYM.zip
 *.dSYM
+*.xcuserstate
