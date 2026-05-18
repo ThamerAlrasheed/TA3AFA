@@ -1,2 +1,32 @@
+# macOS
 .DS_Store
+
+# Replit-specific (not needed in Xcode)
+.replit
+server.js
+scripts/
+build/
+.cache/
+.config/
+.local/
+.agents/
+working/
+functions/
+patch_pbxproj.py
+read_defaults.sh
+seed_defaults.sh
 attached_assets/
+*.lldb
+
+# Large generated assets (download separately)
+MEDSAI/Resources/*.gif
+MEDSAI/Resources/*.mov
+MEDSAI/Resources/*.mp4
+
+# Xcode
+xcuserdata/
+*.xcscmblueprint
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
