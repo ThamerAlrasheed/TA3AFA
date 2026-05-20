@@ -13,28 +13,31 @@ struct RoutineSettingsView: View {
         Form {
             if let patientName = settings.activePatientName {
                 Section {
-                    Label("Managing \(patientName)'s routine", systemImage: "person.2.fill")
+                    Label(SettingsL10n.text("Managing \(patientName)'s routine", "إدارة روتين \(patientName)"), systemImage: "person.2.fill")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
                 .listRowBackground(Color.clear)
             }
 
-            Section("Sleep") {
-                RoutineTimeRow(title: "Wake time", comps: $settings.wakeup,   defaultHour: 7)
-                RoutineTimeRow(title: "Bedtime",   comps: $settings.bedtime,  defaultHour: 23)
+            Section(SettingsL10n.text("Sleep", "النوم")) {
+                RoutineTimeRow(title: SettingsL10n.text("Wake time", "وقت الاستيقاظ"), comps: $settings.wakeup,   defaultHour: 7)
+                RoutineTimeRow(title: SettingsL10n.text("Bedtime", "وقت النوم"),   comps: $settings.bedtime,  defaultHour: 23)
             }
             .listRowBackground(Color.istsehCard)
 
-            Section("Meals") {
-                RoutineTimeRow(title: "Breakfast", comps: $settings.breakfast, defaultHour: 8)
-                RoutineTimeRow(title: "Lunch",     comps: $settings.lunch,     defaultHour: 13)
-                RoutineTimeRow(title: "Dinner",    comps: $settings.dinner,    defaultHour: 19)
+            Section(SettingsL10n.text("Meals", "الوجبات")) {
+                RoutineTimeRow(title: SettingsL10n.text("Breakfast", "الفطور"), comps: $settings.breakfast, defaultHour: 8)
+                RoutineTimeRow(title: SettingsL10n.text("Lunch", "الغداء"),     comps: $settings.lunch,     defaultHour: 13)
+                RoutineTimeRow(title: SettingsL10n.text("Dinner", "العشاء"),    comps: $settings.dinner,    defaultHour: 19)
             }
             .listRowBackground(Color.istsehCard)
 
             Section(
-                footer: Text("Changes save automatically. Medication reminders are refreshed when these times change.")
+                footer: Text(SettingsL10n.text(
+                    "Changes save automatically. Medication reminders are refreshed when these times change.",
+                    "يتم حفظ التغييرات تلقائيًا، وتحديث تذكيرات الأدوية عند تغيير هذه الأوقات."
+                ))
                     .multilineTextAlignment(isArabic ? .trailing : .leading)
             ) {
                 EmptyView()
@@ -43,7 +46,7 @@ struct RoutineSettingsView: View {
         }
         .scrollContentBackground(.hidden)
         .background(Color.istsehPageBackground.ignoresSafeArea())
-        .navigationTitle("Daily Routine")
+        .navigationTitle(SettingsL10n.text("Daily Routine", "الروتين اليومي"))
         .navigationBarTitleDisplayMode(.inline)
         .tint(Color.istsehGreen)
         .onAppear {
@@ -74,9 +77,9 @@ private struct RoutineSaveToast: View {
 
     private var label: String {
         switch status {
-        case .saving: return "Saving…"
-        case .saved:  return "Saved"
-        case .failed: return "Save failed"
+        case .saving: return SettingsL10n.text("Saving…", "جاري الحفظ…")
+        case .saved:  return SettingsL10n.text("Saved", "تم الحفظ")
+        case .failed: return SettingsL10n.text("Save failed", "تعذر الحفظ")
         case .idle:   return ""
         }
     }

@@ -190,7 +190,7 @@ struct AddLocalMedView: View {
                 }
             }
             .onAppear {
-                if dosageTimes.isEmpty { useSuggestedSchedule() }
+                if dosageTimes.isEmpty && !scheduleMode.isPRN { useSuggestedSchedule() }
             }
         }
     }
@@ -633,7 +633,7 @@ struct AddLocalMedView: View {
                 SelectionList(options: scheduleOptions, selection: Binding(
                     get: { scheduleMode.storageValue },
                     set: { value in
-                        scheduleMode = MedicationScheduleMode.fromStorage(value, isPrn: value == "as_needed")
+                        scheduleMode = MedicationScheduleMode.fromStorage(value, isPrn: value == "as_needed" || value == "emergency_only")
                         if scheduleMode.isPRN {
                             remindersEnabled = false
                             dosageTimes = []
@@ -662,7 +662,7 @@ struct AddLocalMedView: View {
 
     private var scheduleTimesStep: some View {
         WizardCard {
-            VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: languageHorizontalAlignment, spacing: 14) {
                 Button {
                     useSuggestedSchedule(preservingExistingDoseRows: true)
                     isManualSchedule = false
@@ -2113,13 +2113,13 @@ private struct SelectionList: View {
                 Button { selection = option.id } label: {
                     HStack(spacing: 12) {
                         if isArabic {
-                            if selection == option.id {
-                                Image(systemName: "checkmark.circle.fill")
-                            }
-                            Spacer()
+                            Image(systemName: "checkmark.circle.fill")
+                                .opacity(selection == option.id ? 1 : 0)
+                                .frame(width: 22)
                             Text(option.title(isArabic: isArabic))
                                 .font(.subheadline.weight(.semibold))
                                 .multilineTextAlignment(.trailing)
+                                .frame(maxWidth: .infinity, alignment: .trailing)
                             Image(systemName: option.systemImage)
                                 .frame(width: 26)
                         } else {
@@ -2128,12 +2128,13 @@ private struct SelectionList: View {
                             Text(option.title(isArabic: isArabic))
                                 .font(.subheadline.weight(.semibold))
                                 .multilineTextAlignment(.leading)
-                            Spacer()
-                            if selection == option.id {
-                                Image(systemName: "checkmark.circle.fill")
-                            }
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Image(systemName: "checkmark.circle.fill")
+                                .opacity(selection == option.id ? 1 : 0)
+                                .frame(width: 22)
                         }
                     }
+                    .frame(maxWidth: .infinity)
                     .frame(minHeight: 46)
                 }
                 .buttonStyle(.bordered)

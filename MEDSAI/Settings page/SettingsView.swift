@@ -1,6 +1,29 @@
 import SwiftUI
 import UserNotifications
 
+enum SettingsL10n {
+    static var isArabic: Bool {
+        UserDefaults.standard.string(forKey: "appearance.language") == "ar"
+    }
+
+    static var layoutDirection: LayoutDirection { isArabic ? .rightToLeft : .leftToRight }
+    static var textAlignment: TextAlignment { isArabic ? .trailing : .leading }
+    static var horizontalAlignment: HorizontalAlignment { isArabic ? .trailing : .leading }
+    static var frameAlignment: Alignment { isArabic ? .trailing : .leading }
+
+    static func text(_ english: String, _ arabic: String) -> String {
+        isArabic ? arabic : english
+    }
+
+    static func managing(_ name: String) -> String {
+        isArabic ? "إدارة ملف \(name)" : "Managing \(name)"
+    }
+
+    static func patientPossessive(_ name: String, _ englishSuffix: String, _ arabicPrefix: String) -> String {
+        isArabic ? "\(arabicPrefix) \(name)" : "\(name)'s \(englishSuffix)"
+    }
+}
+
 // MARK: - Settings Hub
 
 struct SettingsView: View {
@@ -44,10 +67,10 @@ struct SettingsView: View {
             return name
         }
         if settings.role == .patient {
-            return "Your"
+            return SettingsL10n.text("Your", "ملفك")
         }
         let trimmed = "\(settings.firstName) \(settings.lastName)".trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? "Your" : trimmed
+        return trimmed.isEmpty ? SettingsL10n.text("Your", "ملفك") : trimmed
     }
 
     private var accountOwnerName: String? {
@@ -58,18 +81,18 @@ struct SettingsView: View {
     private var headerTitle: String {
         if isCaregiver {
             if let name = settings.activePatientName {
-                return "Managing \(name)"
+                return SettingsL10n.managing(name)
             }
-            return "My Profile"
+            return SettingsL10n.text("My Profile", "ملفي الشخصي")
         }
-        return "My Profile"
+        return SettingsL10n.text("My Profile", "ملفي الشخصي")
     }
 
     private var headerSubtitle: String? {
         if isCaregiver {
             let owner = accountOwnerName ?? currentEmailIfAvailable()
             if hasSelectedPatient, let owner {
-                return "Caregiver account: \(owner)"
+                return SettingsL10n.text("Caregiver account: \(owner)", "حساب مقدم الرعاية: \(owner)")
             }
             return owner
         }
@@ -93,13 +116,19 @@ struct SettingsView: View {
                         selectedPatientCareSections
                     } else {
                         ownPatientCareSections
-                        familySection(title: "Family Members", subtitle: "Manage family and care access")
+                        familySection(
+                            title: SettingsL10n.text("Family Members", "أفراد العائلة"),
+                            subtitle: SettingsL10n.text("Manage family and care access", "إدارة أفراد العائلة وصلاحيات الرعاية")
+                        )
                         preferencesSection
                     }
                 } else {
                     ownPatientCareSections
                     if settings.role == .regular {
-                        familySection(title: "Family Members", subtitle: "Manage family and care access")
+                        familySection(
+                            title: SettingsL10n.text("Family Members", "أفراد العائلة"),
+                            subtitle: SettingsL10n.text("Manage family and care access", "إدارة أفراد العائلة وصلاحيات الرعاية")
+                        )
                     }
                     preferencesSection
                     if settings.role == .regular {
@@ -119,7 +148,7 @@ struct SettingsView: View {
             .scrollContentBackground(.hidden)
             .background(Color.istsehPageBackground.ignoresSafeArea())
             .avoidsTabBar()
-            .navigationTitle("Settings")
+            .navigationTitle(SettingsL10n.text("Settings", "الإعدادات"))
             .tint(Color.istsehGreen)
             .onAppear {
                 Task {
@@ -141,6 +170,7 @@ struct SettingsView: View {
             .onChange(of: languageCode) { _, _ in
                 NotificationCenter.default.post(name: NSNotification.Name("UserRoutineChanged"), object: nil)
             }
+            .id(languageCode)
         }
         .environment(\.layoutDirection, languageCode == "ar" ? .rightToLeft : .leftToRight)
     }
@@ -176,7 +206,7 @@ struct SettingsView: View {
 
                     #if DEBUG
                     if let error = settings.profileLoadError {
-                        Text("DEBUG profile load failed: \(error)")
+                        Text(SettingsL10n.text("DEBUG profile load failed: \(error)", "فشل تحميل الملف في وضع التطوير: \(error)"))
                             .font(.caption2)
                             .foregroundStyle(.red)
                             .multilineTextAlignment(.center)
@@ -190,7 +220,12 @@ struct SettingsView: View {
                     }
                     .environmentObject(settings)
                 } else {
-                    Label(settings.role == .patient ? "Patient profile" : "Personal care", systemImage: "staroflife.fill")
+                    Label(
+                        settings.role == .patient
+                            ? SettingsL10n.text("Patient profile", "ملف المريض")
+                            : SettingsL10n.text("Personal care", "الرعاية الشخصية"),
+                        systemImage: "staroflife.fill"
+                    )
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Color.istsehGreen)
                         .padding(.horizontal, 14)
@@ -217,11 +252,12 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var ownPatientCareSections: some View {
-        Section("Care") {
+        Section(SettingsL10n.text("Care", "الرعاية")) {
             SettingsNavRow(
                 icon: "cross.case.fill", iconColor: Color.istsehGreen,
-                title: "Medical Profile",
-                subtitle: "Allergies and chronic conditions"
+                title: SettingsL10n.text("Medical Profile", "الملف الطبي"),
+                subtitle: SettingsL10n.text("Allergies and chronic conditions", "الحساسية والحالات المزمنة"),
+                showsDivider: true
             ) {
                 MedicalProfileView(
                     patientId: medicalProfilePatientId,
@@ -232,16 +268,17 @@ struct SettingsView: View {
 
             SettingsNavRow(
                 icon: "clock.fill", iconColor: Color.istsehGreen,
-                title: "Daily Routine",
-                subtitle: "Wake time, meals, and bedtime"
+                title: SettingsL10n.text("Daily Routine", "الروتين اليومي"),
+                subtitle: SettingsL10n.text("Wake time, meals, and bedtime", "وقت الاستيقاظ والوجبات والنوم"),
+                showsDivider: true
             ) {
                 RoutineSettingsView().environmentObject(settings)
             }
 
             SettingsNavRow(
                 icon: "bell.badge.fill", iconColor: Color.istsehGreen,
-                title: "Reminders",
-                subtitle: "Medication and appointment alerts"
+                title: SettingsL10n.text("Reminders", "التذكيرات"),
+                subtitle: SettingsL10n.text("Medication and appointment alerts", "تنبيهات الأدوية والمواعيد")
             ) {
                 ReminderSettingsView()
             }
@@ -251,12 +288,14 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var selectedPatientCareSections: some View {
-        Section(settings.activePatientName.map { "Managing \($0)" } ?? "Patient Care") {
+        Section(settings.activePatientName.map { SettingsL10n.managing($0) } ?? SettingsL10n.text("Patient Care", "رعاية المريض")) {
             SettingsNavRow(
                 icon: "cross.case.fill", iconColor: Color.istsehGreen,
-                title: "Medical Profile",
-                subtitle: settings.activePatientName.map { "\($0)'s allergies and conditions" }
-                    ?? "Allergies and chronic conditions"
+                title: SettingsL10n.text("Medical Profile", "الملف الطبي"),
+                subtitle: settings.activePatientName.map {
+                    SettingsL10n.patientPossessive($0, "allergies and conditions", "الحساسية والحالات الخاصة بـ")
+                } ?? SettingsL10n.text("Allergies and chronic conditions", "الحساسية والحالات المزمنة"),
+                showsDivider: true
             ) {
                 MedicalProfileView(
                     patientId: selectedPatientId,
@@ -267,28 +306,33 @@ struct SettingsView: View {
 
             SettingsNavRow(
                 icon: "clock.fill", iconColor: Color.istsehGreen,
-                title: "Daily Routine",
-                subtitle: settings.activePatientName.map { "\($0)'s wake time, meals, and bedtime" }
-                    ?? "Wake time, meals, and bedtime"
+                title: SettingsL10n.text("Daily Routine", "الروتين اليومي"),
+                subtitle: settings.activePatientName.map {
+                    SettingsL10n.patientPossessive($0, "wake time, meals, and bedtime", "روتين الاستيقاظ والوجبات والنوم الخاص بـ")
+                } ?? SettingsL10n.text("Wake time, meals, and bedtime", "وقت الاستيقاظ والوجبات والنوم"),
+                showsDivider: true
             ) {
                 RoutineSettingsView().environmentObject(settings)
             }
 
             SettingsNavRow(
                 icon: "bell.badge.fill", iconColor: Color.istsehGreen,
-                title: "Reminders",
-                subtitle: "Medication and appointment alerts for this patient"
+                title: SettingsL10n.text("Reminders", "التذكيرات"),
+                subtitle: SettingsL10n.text("Medication and appointment alerts for this patient", "تنبيهات الأدوية والمواعيد لهذا المريض")
             ) {
                 ReminderSettingsView()
             }
         }
         .listRowBackground(Color.istsehCard)
 
-        familySection(title: "Change Patient", subtitle: "Switch or manage family members")
+        familySection(
+            title: SettingsL10n.text("Change Patient", "تغيير المريض"),
+            subtitle: SettingsL10n.text("Switch or manage family members", "التبديل أو إدارة أفراد العائلة")
+        )
     }
 
     private func familySection(title: String, subtitle: String) -> some View {
-        Section("Family") {
+        Section(SettingsL10n.text("Family", "العائلة")) {
             SettingsNavRow(
                 icon: "person.2.fill", iconColor: Color.istsehGreen,
                 title: title,
@@ -298,138 +342,124 @@ struct SettingsView: View {
             }
         }
         .listRowBackground(Color.istsehCard)
+        .listRowSeparator(.hidden)
     }
 
     private var preferencesSection: some View {
-        Section("App Preferences") {
-            VStack(alignment: languageCode == "ar" ? .trailing : .leading, spacing: 8) {
-                HStack(spacing: 10) {
-                    SettingsIconBadge(systemName: "paintbrush.fill", color: Color.istsehGreen)
-                    Text("Appearance")
-                        .font(.body)
-                        .foregroundStyle(.primary)
-                }
-                Picker("Appearance", selection: $settings.appearanceMode) {
+        Section(SettingsL10n.text("App Preferences", "تفضيلات التطبيق")) {
+            VStack(alignment: SettingsL10n.horizontalAlignment, spacing: 8) {
+                SettingsPlainRow(icon: "paintbrush.fill", text: SettingsL10n.text("Appearance", "المظهر"))
+                Picker(SettingsL10n.text("Appearance", "المظهر"), selection: $settings.appearanceMode) {
                     ForEach(AppSettings.AppearanceMode.allCases) { mode in
-                        Text(mode.label).tag(mode)
+                        Text(mode.localizedLabel).tag(mode)
                     }
                 }
                 .pickerStyle(.segmented)
                 .padding(languageCode == "ar" ? .trailing : .leading, 40)
             }
             .padding(.vertical, 4)
+            .listRowSeparator(.hidden)
 
-            HStack(spacing: 10) {
-                SettingsIconBadge(systemName: "globe", color: Color.istsehGreen)
-                Text("Language")
-                    .foregroundStyle(.primary)
-                Spacer()
-                Menu {
-                    Button("English") { languageCode = "en" }
-                    Button("العربية") { languageCode = "ar" }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(languageDisplayName)
-                            .foregroundStyle(Color.istsehGreen)
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(Color.istsehGreen)
-                    }
-                }
+            SettingsMenuRow(
+                icon: "globe",
+                title: SettingsL10n.text("Language", "اللغة"),
+                value: languageDisplayName
+            ) {
+                languageMenu
             }
+            .listRowSeparator(.hidden)
         }
         .listRowBackground(Color.istsehCard)
+        .listRowSeparator(.hidden)
+    }
+
+    private var languageMenu: some View {
+        Menu {
+            Button(SettingsL10n.text("English", "الإنجليزية")) { languageCode = "en" }
+            Button(SettingsL10n.text("Arabic", "العربية")) { languageCode = "ar" }
+        } label: {
+            HStack(spacing: 4) {
+                Text(languageDisplayName)
+                    .foregroundStyle(Color.istsehGreen)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(Color.istsehGreen)
+            }
+        }
     }
 
     private var accountProfileSection: some View {
-        Section("Account Profile") {
-            HStack {
-                Text("First name")
-                Spacer()
-                TextField("First", text: $settings.firstName)
-                    .multilineTextAlignment(.trailing)
-                    .textInputAutocapitalization(.words)
-            }
-            HStack {
-                Text("Last name")
-                Spacer()
-                TextField("Last", text: $settings.lastName)
-                    .multilineTextAlignment(.trailing)
-                    .textInputAutocapitalization(.words)
-            }
-            HStack {
-                Text("Email")
-                Spacer()
-                Text(currentEmail()).foregroundStyle(.secondary)
-            }
-            DatePicker(
-                "Date of birth",
+        Section(SettingsL10n.text("Account Profile", "ملف الحساب")) {
+            SettingsEditableTextRow(
+                title: SettingsL10n.text("First name", "الاسم الأول"),
+                placeholder: SettingsL10n.text("First", "الاسم الأول"),
+                text: $settings.firstName
+            )
+            SettingsEditableTextRow(
+                title: SettingsL10n.text("Last name", "اسم العائلة"),
+                placeholder: SettingsL10n.text("Last", "اسم العائلة"),
+                text: $settings.lastName
+            )
+            SettingsValueRow(title: SettingsL10n.text("Email", "البريد الإلكتروني"), value: currentEmail())
+            SettingsDateRow(
+                title: SettingsL10n.text("Date of birth", "تاريخ الميلاد"),
                 selection: Binding(
                     get: { settings.dateOfBirth ?? Date(timeIntervalSince1970: 0) },
                     set: { settings.dateOfBirth = $0 }
                 ),
-                displayedComponents: .date
             )
         }
         .listRowBackground(Color.istsehCard)
+        .listRowSeparator(.hidden)
     }
 
     private var helpLegalSection: some View {
-        Section("Help & Legal") {
-            Button {
+        Section(SettingsL10n.text("Help & Legal", "المساعدة والخصوصية")) {
+            SettingsActionRow(
+                icon: "sparkles",
+                text: SettingsL10n.text("Show tutorial again", "عرض الشرح مرة أخرى"),
+                showsDivider: true
+            ) {
                 settings.onboardingCompleted = false
-            } label: {
-                HStack(spacing: 10) {
-                    SettingsIconBadge(systemName: "sparkles", color: Color.istsehGreen)
-                    Text("Show tutorial again").foregroundStyle(.primary)
-                }
             }
-            .buttonStyle(.plain)
 
-            NavigationLink {
+            SettingsLinkRow(
+                icon: "questionmark.circle.fill",
+                text: SettingsL10n.text("FAQ", "الأسئلة الشائعة"),
+                showsDivider: true
+            ) {
                 FAQView()
-            } label: {
-                HStack(spacing: 10) {
-                    SettingsIconBadge(systemName: "questionmark.circle.fill", color: Color.istsehGreen)
-                    Text("FAQ").foregroundStyle(.primary)
-                }
             }
 
-            Button {
+            SettingsActionRow(
+                icon: "hand.raised.fill",
+                text: SettingsL10n.text("Privacy Policy", "سياسة الخصوصية"),
+                showsDivider: true
+            ) {
                 openURLString("https://example.com/privacy")
-            } label: {
-                HStack(spacing: 10) {
-                    SettingsIconBadge(systemName: "hand.raised.fill", color: Color.istsehGreen)
-                    Text("Privacy Policy").foregroundStyle(.primary)
-                }
             }
-            .buttonStyle(.plain)
 
-            Button {
+            SettingsActionRow(
+                icon: "doc.text.fill",
+                text: SettingsL10n.text("Terms of Service", "شروط الاستخدام"),
+                showsDivider: true
+            ) {
                 openURLString("https://example.com/terms")
-            } label: {
-                HStack(spacing: 10) {
-                    SettingsIconBadge(systemName: "doc.text.fill", color: Color.istsehGreen)
-                    Text("Terms of Service").foregroundStyle(.primary)
-                }
             }
-            .buttonStyle(.plain)
 
-            Button {
+            SettingsActionRow(
+                icon: "envelope.fill",
+                text: SettingsL10n.text("Contact Support", "التواصل مع الدعم")
+            ) {
                 openMail(
                     to: "support@yourapp.example",
                     subject: "ISTSEH Support",
                     body: defaultSupportBody()
                 )
-            } label: {
-                HStack(spacing: 10) {
-                    SettingsIconBadge(systemName: "envelope.fill", color: Color.istsehGreen)
-                    Text("Contact Support").foregroundStyle(.primary)
-                }
             }
-            .buttonStyle(.plain)
         }
         .listRowBackground(Color.istsehCard)
+        .listRowSeparator(.hidden)
     }
 
     private var sessionActionsSection: some View {
@@ -437,7 +467,9 @@ struct SettingsView: View {
             Button(role: .destructive) { signOut() } label: {
                 HStack {
                     Spacer()
-                    Label(settings.role == .patient ? "Disconnect from Caregiver" : "Sign out",
+                    Label(settings.role == .patient
+                          ? SettingsL10n.text("Disconnect from Caregiver", "قطع الاتصال بمقدم الرعاية")
+                          : SettingsL10n.text("Sign out", "تسجيل الخروج"),
                           systemImage: "rectangle.portrait.and.arrow.right")
                     Spacer()
                 }
@@ -488,7 +520,7 @@ struct SettingsView: View {
     // MARK: - Helpers
 
     private func currentEmail() -> String {
-        supabase.client.auth.currentSession?.user.email ?? "Not available"
+        supabase.client.auth.currentSession?.user.email ?? SettingsL10n.text("Not available", "غير متوفر")
     }
 
     private func currentEmailIfAvailable() -> String? {
@@ -496,7 +528,7 @@ struct SettingsView: View {
     }
 
     private var languageDisplayName: String {
-        languageCode == "ar" ? "Arabic" : "English"
+        languageCode == "ar" ? SettingsL10n.text("Arabic", "العربية") : SettingsL10n.text("English", "الإنجليزية")
     }
 
     private func signOut() {
@@ -542,24 +574,39 @@ struct SettingsView: View {
 
     private func defaultSupportBody() -> String {
         let email = currentEmail()
-        return """
-        Hello Support,
+        if SettingsL10n.isArabic {
+            return """
+            مرحبًا فريق الدعم،
 
-        I need help with the ISTSEH app.
+            أحتاج مساعدة في تطبيق استصح.
 
-        Email: \(email)
-        App Version: 1.0
-        iOS: \(UIDevice.current.systemVersion)
-        Device: \(UIDevice.current.model)
+            البريد الإلكتروني: \(email)
+            إصدار التطبيق: 1.0
+            iOS: \(UIDevice.current.systemVersion)
+            الجهاز: \(UIDevice.current.model)
 
-        Describe your issue here:
-        """
+            اكتب المشكلة هنا:
+            """
+        } else {
+            return """
+            Hello Support,
+
+            I need help with the ISTSEH app.
+
+            Email: \(email)
+            App Version: 1.0
+            iOS: \(UIDevice.current.systemVersion)
+            Device: \(UIDevice.current.model)
+
+            Describe your issue here:
+            """
+        }
     }
 
     #if DEBUG
     private var debugContextSection: some View {
-        Section("DEBUG Context") {
-            Button("Refresh Context Snapshot") {
+        Section(SettingsL10n.text("DEBUG Context", "سياق التطوير")) {
+            Button(SettingsL10n.text("Refresh Context Snapshot", "تحديث لقطة السياق")) {
                 Task { await refreshDebugSnapshot() }
             }
 
@@ -576,7 +623,7 @@ struct SettingsView: View {
                 DebugRow(label: "medications", value: "\(snapshot.medCount)")
                 DebugRow(label: "pending med notifications", value: "\(snapshot.pendingMedicationNotifications)")
             } else {
-                Text("No snapshot loaded")
+                Text(SettingsL10n.text("No snapshot loaded", "لم يتم تحميل لقطة"))
                     .foregroundStyle(.secondary)
             }
         }
@@ -686,7 +733,7 @@ private struct ReminderSettingsView: View {
                     .multilineTextAlignment(isArabic ? .trailing : .leading)
             ) {
                 Toggle(isOn: $notificationsEnabled) {
-                    Label("Enable reminders", systemImage: "bell.fill")
+                    Label(SettingsL10n.text("Enable reminders", "تفعيل التذكيرات"), systemImage: "bell.fill")
                 }
                 .onChange(of: notificationsEnabled) { _, newVal in
                     Task {
@@ -703,21 +750,21 @@ private struct ReminderSettingsView: View {
                     }
                 }
 
-                Toggle("Medication reminders", isOn: $notifyDoses)
+                Toggle(SettingsL10n.text("Medication reminders", "تذكيرات الأدوية"), isOn: $notifyDoses)
                     .disabled(!notificationsEnabled)
                     .onChange(of: notifyDoses) { _, _ in
                         persistReminderSettings()
                         NotificationCenter.default.post(name: NSNotification.Name("UserRoutineChanged"), object: nil)
                     }
 
-                Toggle("Appointment reminders", isOn: $notifyAppointments)
+                Toggle(SettingsL10n.text("Appointment reminders", "تذكيرات المواعيد"), isOn: $notifyAppointments)
                     .disabled(!notificationsEnabled)
                     .onChange(of: notifyAppointments) { _, _ in
                         persistReminderSettings()
                     }
 
                 if settings.activePatientID != nil {
-                    Toggle("Caregiver medication reminders", isOn: $notifyCaregiverDoses)
+                    Toggle(SettingsL10n.text("Caregiver medication reminders", "تذكيرات أدوية لمقدم الرعاية"), isOn: $notifyCaregiverDoses)
                         .disabled(!notificationsEnabled || !notifyDoses)
                         .onChange(of: notifyCaregiverDoses) { _, _ in
                             persistReminderSettings()
@@ -730,21 +777,24 @@ private struct ReminderSettingsView: View {
             #if DEBUG
             if showDebugContextPanel {
                 Section {
-                    Button("Test self reminder in 15 seconds") {
+                    Button(SettingsL10n.text("Test self reminder in 15 seconds", "اختبار تذكير شخصي بعد 15 ثانية")) {
                         NotificationsManager.shared.scheduleDebugMedicationReminder(type: .selfUser)
                     }
 
-                    Button("Test family member reminder in 15 seconds") {
+                    Button(SettingsL10n.text("Test family member reminder in 15 seconds", "اختبار تذكير لفرد عائلة بعد 15 ثانية")) {
                         NotificationsManager.shared.scheduleDebugMedicationReminder(type: .patient)
                     }
 
-                    Button("Test caregiver reminder in 15 seconds") {
+                    Button(SettingsL10n.text("Test caregiver reminder in 15 seconds", "اختبار تذكير لمقدم الرعاية بعد 15 ثانية")) {
                         NotificationsManager.shared.scheduleDebugMedicationReminder(type: .caregiver)
                     }
                 } header: {
-                    Text("Developer Tests")
+                    Text(SettingsL10n.text("Developer Tests", "اختبارات المطور"))
                 } footer: {
-                    Text("DEBUG only. These buttons are not compiled into production builds.")
+                    Text(SettingsL10n.text(
+                        "DEBUG only. These buttons are not compiled into production builds.",
+                        "تظهر في وضع التطوير فقط، ولا يتم تضمينها في نسخة الإنتاج."
+                    ))
                         .multilineTextAlignment(isArabic ? .trailing : .leading)
                 }
                 .listRowBackground(Color.istsehCard)
@@ -753,7 +803,7 @@ private struct ReminderSettingsView: View {
         }
         .scrollContentBackground(.hidden)
         .background(Color.istsehPageBackground.ignoresSafeArea())
-        .navigationTitle("Reminders")
+        .navigationTitle(SettingsL10n.text("Reminders", "التذكيرات"))
         .navigationBarTitleDisplayMode(.inline)
         .tint(Color.istsehGreen)
         .task(id: reminderContextKey) {
@@ -764,9 +814,15 @@ private struct ReminderSettingsView: View {
 
     private var footerText: String {
         if let name = settings.activePatientName {
-            return "Reminders are scheduled using \(name)'s medication plan and daily routine."
+            return SettingsL10n.text(
+                "Reminders are scheduled using \(name)'s medication plan and daily routine.",
+                "تتم جدولة التذكيرات حسب خطة أدوية \(name) وروتينه اليومي."
+            )
         }
-        return "Reminders are scheduled using your medication plan and daily routine."
+        return SettingsL10n.text(
+            "Reminders are scheduled using your medication plan and daily routine.",
+            "تتم جدولة التذكيرات حسب خطة أدويتك وروتينك اليومي."
+        )
     }
 
     private func loadReminderSettings() {
@@ -794,26 +850,26 @@ private struct FAQView: View {
 
     var body: some View {
         List {
-            Section(header: Text("General")) {
-                Text("How do I add a medication?")
+            Section(header: Text(SettingsL10n.text("General", "عام"))) {
+                Text(SettingsL10n.text("How do I add a medication?", "كيف أضيف دواء؟"))
                     .multilineTextAlignment(isArabic ? .trailing : .leading)
-                Text("How do I edit or delete a medication?")
-                    .multilineTextAlignment(isArabic ? .trailing : .leading)
-            }
-            Section(header: Text("Scheduling")) {
-                Text("How are dose times calculated?")
-                    .multilineTextAlignment(isArabic ? .trailing : .leading)
-                Text("How do food rules affect my schedule?")
+                Text(SettingsL10n.text("How do I edit or delete a medication?", "كيف أعدل أو أحذف دواء؟"))
                     .multilineTextAlignment(isArabic ? .trailing : .leading)
             }
-            Section(header: Text("Notifications")) {
-                Text("How can I change reminders?")
+            Section(header: Text(SettingsL10n.text("Scheduling", "الجدولة"))) {
+                Text(SettingsL10n.text("How are dose times calculated?", "كيف يتم حساب أوقات الجرعات؟"))
                     .multilineTextAlignment(isArabic ? .trailing : .leading)
-                Text("Why didn't I receive a notification?")
+                Text(SettingsL10n.text("How do food rules affect my schedule?", "كيف تؤثر تعليمات الطعام على الجدول؟"))
+                    .multilineTextAlignment(isArabic ? .trailing : .leading)
+            }
+            Section(header: Text(SettingsL10n.text("Notifications", "التنبيهات"))) {
+                Text(SettingsL10n.text("How can I change reminders?", "كيف أغير التذكيرات؟"))
+                    .multilineTextAlignment(isArabic ? .trailing : .leading)
+                Text(SettingsL10n.text("Why didn't I receive a notification?", "لماذا لم يصلني تنبيه؟"))
                     .multilineTextAlignment(isArabic ? .trailing : .leading)
             }
         }
-        .navigationTitle("FAQ")
+        .navigationTitle(SettingsL10n.text("FAQ", "الأسئلة الشائعة"))
         .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
     }
 }
@@ -825,22 +881,354 @@ struct SettingsNavRow<D: View>: View {
     let iconColor: Color
     let title: String
     let subtitle: String
+    var showsDivider: Bool = false
     @ViewBuilder var destination: () -> D
+    @Environment(\.layoutDirection) private var layoutDirection
+    @State private var isActive = false
+
+    private var isRTL: Bool { layoutDirection == .rightToLeft }
+    private var rowTextAlignment: TextAlignment { isRTL ? .trailing : .leading }
+    private var rowHorizontalAlignment: HorizontalAlignment { isRTL ? .trailing : .leading }
+    private var rowFrameAlignment: Alignment { isRTL ? .trailing : .leading }
 
     var body: some View {
-        NavigationLink(destination: destination()) {
-            HStack(spacing: 14) {
-                SettingsIconBadge(systemName: icon, color: iconColor)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title)
-                        .font(.body)
-                        .foregroundStyle(.primary)
-                    Text(subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        Button {
+            isActive = true
+        } label: {
+            VStack(spacing: 0) {
+                rowContent
+                if showsDivider {
+                    SettingsRowDivider()
                 }
             }
-            .padding(.vertical, 3)
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowSeparator(.hidden)
+        .navigationDestination(isPresented: $isActive) {
+            destination()
+        }
+    }
+
+    private var rowContent: some View {
+        HStack(spacing: 14) {
+            if isRTL {
+                chevronView
+                titleStack
+                SettingsIconBadge(systemName: icon, color: iconColor)
+            } else {
+                SettingsIconBadge(systemName: icon, color: iconColor)
+                titleStack
+                chevronView
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+    }
+
+    private var titleStack: some View {
+        VStack(alignment: rowHorizontalAlignment, spacing: 2) {
+            Text(title)
+                .font(.body)
+                .foregroundStyle(.primary)
+                .multilineTextAlignment(rowTextAlignment)
+                .frame(maxWidth: .infinity, alignment: rowFrameAlignment)
+            Text(subtitle)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(rowTextAlignment)
+                .frame(maxWidth: .infinity, alignment: rowFrameAlignment)
+        }
+        .frame(maxWidth: .infinity, alignment: rowFrameAlignment)
+    }
+
+    private var chevronView: some View {
+        Image(systemName: isRTL ? "chevron.left" : "chevron.right")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary.opacity(0.75))
+            .frame(width: 18)
+    }
+}
+
+struct SettingsLinkRow<D: View>: View {
+    let icon: String
+    let text: String
+    var iconColor: Color = Color.istsehGreen
+    var showsDivider: Bool = false
+    @ViewBuilder var destination: () -> D
+    @State private var isActive = false
+
+    var body: some View {
+        SettingsActionRow(
+            icon: icon,
+            text: text,
+            iconColor: iconColor,
+            showsChevron: true,
+            showsDivider: showsDivider
+        ) {
+            isActive = true
+        }
+        .navigationDestination(isPresented: $isActive) {
+            destination()
+        }
+    }
+}
+
+struct SettingsActionRow: View {
+    let icon: String
+    let text: String
+    var iconColor: Color = Color.istsehGreen
+    var showsChevron: Bool = false
+    var showsDivider: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 0) {
+                SettingsPlainRow(
+                    icon: icon,
+                    text: text,
+                    iconColor: iconColor,
+                    showsChevron: showsChevron
+                )
+                .padding(.vertical, 10)
+
+                if showsDivider {
+                    SettingsRowDivider()
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowSeparator(.hidden)
+    }
+}
+
+struct SettingsPlainRow: View {
+    let icon: String
+    let text: String
+    var iconColor: Color = Color.istsehGreen
+    var showsChevron: Bool = false
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    private var isRTL: Bool { layoutDirection == .rightToLeft }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if isRTL {
+                if showsChevron {
+                    SettingsDisclosureChevron()
+                }
+                Text(text)
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                SettingsIconBadge(systemName: icon, color: iconColor)
+            } else {
+                SettingsIconBadge(systemName: icon, color: iconColor)
+                Text(text)
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                if showsChevron {
+                    SettingsDisclosureChevron()
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+struct SettingsMenuRow<MenuContent: View>: View {
+    let icon: String
+    let title: String
+    let value: String
+    @ViewBuilder var menu: () -> MenuContent
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    private var isRTL: Bool { layoutDirection == .rightToLeft }
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if isRTL {
+                menu()
+                Text(title)
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                SettingsIconBadge(systemName: icon, color: Color.istsehGreen)
+            } else {
+                SettingsIconBadge(systemName: icon, color: Color.istsehGreen)
+                Text(title)
+                    .foregroundStyle(.primary)
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                menu()
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+    }
+}
+
+private struct SettingsDisclosureChevron: View {
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    var body: some View {
+        Image(systemName: layoutDirection == .rightToLeft ? "chevron.left" : "chevron.right")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary.opacity(0.75))
+            .frame(width: 18)
+    }
+}
+
+private struct SettingsRowDivider: View {
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.istsehCardStroke.opacity(0.75))
+            .frame(maxWidth: .infinity)
+            .frame(height: 1 / UIScreen.main.scale)
+            .padding(layoutDirection == .rightToLeft ? .trailing : .leading, 44)
+            .padding(layoutDirection == .rightToLeft ? .leading : .trailing, 32)
+    }
+}
+
+private struct SettingsMixedDirectionText: View {
+    let text: String
+    var style: Font? = nil
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    private var isLTRValue: Bool {
+        text.range(of: #"[A-Za-z0-9@._+\-/]"#, options: .regularExpression) != nil
+    }
+
+    var body: some View {
+        Text(text)
+            .font(style)
+            .environment(\.layoutDirection, isLTRValue ? .leftToRight : layoutDirection)
+            .multilineTextAlignment(isLTRValue ? .leading : (layoutDirection == .rightToLeft ? .trailing : .leading))
+            .lineLimit(1)
+            .minimumScaleFactor(0.85)
+    }
+}
+
+struct SettingsValueRow: View {
+    let title: String
+    let value: String
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    private var isRTL: Bool { layoutDirection == .rightToLeft }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            if isRTL {
+                SettingsMixedDirectionText(text: value)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Text(title)
+                    .multilineTextAlignment(.trailing)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            } else {
+                Text(title)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer()
+                SettingsMixedDirectionText(text: value)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+struct SettingsEditableTextRow: View {
+    let title: String
+    let placeholder: String
+    @Binding var text: String
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    private var isRTL: Bool { layoutDirection == .rightToLeft }
+    private var isLTRInput: Bool {
+        text.range(of: #"[A-Za-z0-9@._+\-/]"#, options: .regularExpression) != nil
+            || placeholder.range(of: #"[A-Za-z0-9@._+\-/]"#, options: .regularExpression) != nil
+    }
+    private var inputDirection: LayoutDirection {
+        isLTRInput ? .leftToRight : (isRTL ? .rightToLeft : .leftToRight)
+    }
+    private var inputAlignment: TextAlignment {
+        isLTRInput ? .leading : (isRTL ? .trailing : .trailing)
+    }
+
+    var body: some View {
+        Group {
+            if isRTL {
+                VStack(alignment: .trailing, spacing: 8) {
+                    Text(title)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    TextField(placeholder, text: $text)
+                        .multilineTextAlignment(inputAlignment)
+                        .textInputAutocapitalization(isLTRInput ? .never : .words)
+                        .environment(\.layoutDirection, inputDirection)
+                        .padding(.horizontal, 14)
+                        .frame(minHeight: 44)
+                        .frame(maxWidth: .infinity)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(Color.istsehPageBackground.opacity(0.45))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .stroke(Color.istsehCardStroke, lineWidth: 1)
+                        )
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.vertical, 4)
+            } else {
+                HStack {
+                    Text(title)
+                    Spacer(minLength: 16)
+                    TextField(placeholder, text: $text)
+                        .multilineTextAlignment(inputAlignment)
+                        .textInputAutocapitalization(isLTRInput ? .never : .words)
+                        .environment(\.layoutDirection, inputDirection)
+                }
+            }
+        }
+    }
+}
+
+struct SettingsDateRow: View {
+    let title: String
+    @Binding var selection: Date
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    private var isRTL: Bool { layoutDirection == .rightToLeft }
+
+    var body: some View {
+        DatePicker(
+            title,
+            selection: $selection,
+            displayedComponents: .date
+        )
+        .multilineTextAlignment(isRTL ? .trailing : .leading)
+        .environment(\.layoutDirection, layoutDirection)
+    }
+}
+
+extension AppSettings.AppearanceMode {
+    var localizedLabel: String {
+        switch self {
+        case .light:
+            return SettingsL10n.text("Light", "فاتح")
+        case .dark:
+            return SettingsL10n.text("Dark", "داكن")
+        case .system:
+            return SettingsL10n.text("System", "تلقائي")
         }
     }
 }

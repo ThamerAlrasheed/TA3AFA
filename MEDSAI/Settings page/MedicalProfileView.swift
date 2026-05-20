@@ -82,7 +82,7 @@ struct MedicalProfileView: View {
             get: { errorMessage != nil },
             set: { if !$0 { errorMessage = nil } }
         )) {
-            Button("OK", role: .cancel) {}
+            Button(SettingsL10n.text("OK", "حسنًا"), role: .cancel) {}
         } message: {
             Text(errorMessage ?? "")
         }
@@ -121,19 +121,30 @@ struct MedicalProfileView: View {
     private var header: some View {
         ISTSEHCard {
             HStack(alignment: .top, spacing: 14) {
-                ISTSEHIconBadge(systemName: "heart.text.clipboard.fill")
-                VStack(alignment: isArabic ? .trailing : .leading, spacing: 6) {
-                    Text(MedicalProfileText.medicalProfile)
-                        .font(.title2.weight(.bold))
-                        .multilineTextAlignment(isArabic ? .trailing : .leading)
-                    Text(patientName.isEmpty ? MedicalProfileText.selectAllThatApply : patientName)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(isArabic ? .trailing : .leading)
+                if isArabic {
+                    headerText
+                    ISTSEHIconBadge(systemName: "heart.text.clipboard.fill")
+                } else {
+                    ISTSEHIconBadge(systemName: "heart.text.clipboard.fill")
+                    headerText
                 }
-                Spacer()
             }
         }
+    }
+
+    private var headerText: some View {
+        VStack(alignment: isArabic ? .trailing : .leading, spacing: 6) {
+            Text(MedicalProfileText.medicalProfile)
+                .font(.title2.weight(.bold))
+                .multilineTextAlignment(isArabic ? .trailing : .leading)
+                .frame(maxWidth: .infinity, alignment: isArabic ? .trailing : .leading)
+            Text(patientName.isEmpty ? MedicalProfileText.selectAllThatApply : patientName)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(isArabic ? .trailing : .leading)
+                .frame(maxWidth: .infinity, alignment: isArabic ? .trailing : .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: isArabic ? .trailing : .leading)
     }
 
     private func loadProfile() async {

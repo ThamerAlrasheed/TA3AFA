@@ -48,6 +48,8 @@ struct RootTabView: View {
 private struct GlassTabBar: View {
     @Binding var selection: Int
     let onSelect: (Int) -> Void
+    @AppStorage("appearance.language") private var languageCode: String =
+        Locale.current.language.languageCode?.identifier ?? "en"
 
     private struct Item: Identifiable {
         let id: Int
@@ -56,13 +58,19 @@ private struct GlassTabBar: View {
     }
 
     // Order must match the TabView tags above
-    private let items: [Item] = [
-        .init(id: 0, title: "Today",    systemImage: "calendar.badge.clock"),
-        .init(id: 1, title: "Schedule", systemImage: "calendar"),
-        .init(id: 2, title: "Meds",     systemImage: "pills.fill"),
-        .init(id: 3, title: "Search",   systemImage: "magnifyingglass"), // 👈 New button
-        .init(id: 4, title: "Settings", systemImage: "gearshape")
-    ]
+    private var items: [Item] {
+        [
+            .init(id: 0, title: localized("Today", "اليوم"), systemImage: "calendar.badge.clock"),
+            .init(id: 1, title: localized("Schedule", "الجدول"), systemImage: "calendar"),
+            .init(id: 2, title: localized("Meds", "الأدوية"), systemImage: "pills.fill"),
+            .init(id: 3, title: localized("Search", "البحث"), systemImage: "magnifyingglass"),
+            .init(id: 4, title: localized("Settings", "الإعدادات"), systemImage: "gearshape")
+        ]
+    }
+
+    private func localized(_ english: String, _ arabic: String) -> String {
+        languageCode == "ar" ? arabic : english
+    }
 
     var body: some View {
         HStack(spacing: 8) {

@@ -131,7 +131,10 @@ final class AppSettings: ObservableObject {
         SupabaseManager.shared.onSessionExpired = { [weak self] in
             guard let self else { return }
             Task { @MainActor in
-                self.sessionRevokedMessage = "Your access to this patient profile has been revoked by the caregiver."
+                self.sessionRevokedMessage = SettingsL10n.text(
+                    "Your access to this patient profile has been revoked by the caregiver.",
+                    "تم إلغاء وصولك إلى ملف هذا المريض بواسطة مقدم الرعاية."
+                )
                 self.forceDisconnectPatient()
             }
         }
@@ -262,7 +265,7 @@ final class AppSettings: ObservableObject {
         if !firstName.isEmpty {
             return firstName
         }
-        return "My Profile"
+        return SettingsL10n.text("My Profile", "ملفي الشخصي")
     }
 
     // MARK: - Supabase sync

@@ -9,6 +9,10 @@ struct LinkedDevicesView: View {
     @State private var errorMessage: String?
     @State private var deviceToRevoke: PatientDevice?
     @State private var isRevoking = false
+    @AppStorage("appearance.language") private var languageCode: String =
+        Locale.current.language.languageCode?.identifier ?? "en"
+
+    private var isArabic: Bool { languageCode == "ar" }
 
     var body: some View {
         List {
@@ -25,37 +29,42 @@ struct LinkedDevicesView: View {
                 }
             } else if devices.isEmpty {
                 Section {
-                    Text("No linked devices found for this patient.")
+                    Text(SettingsL10n.text("No linked devices found for this patient.", "لا توجد أجهزة مرتبطة بهذا المريض."))
                         .foregroundColor(.secondary)
                         .italic()
+                        .multilineTextAlignment(SettingsL10n.textAlignment)
                 }
             } else {
-                Section(header: Text("Connected Devices")) {
+                Section(header: Text(SettingsL10n.text("Connected Devices", "الأجهزة المتصلة"))) {
                     ForEach(devices) { device in
                         deviceRow(device)
                     }
                 }
             }
         }
-        .navigationTitle("\(patientName)'s Devices")
+        .navigationTitle(SettingsL10n.text("\(patientName)'s Devices", "أجهزة \(patientName)"))
         .task {
             await loadDevices()
         }
-        .alert("Revoke Device?", isPresented: Binding(
+        .alert(SettingsL10n.text("Revoke Device?", "إلغاء ربط الجهاز؟"), isPresented: Binding(
             get: { deviceToRevoke != nil },
             set: { if !$0 { deviceToRevoke = nil } }
         )) {
-            Button("Revoke", role: .destructive) {
+            Button(SettingsL10n.text("Revoke", "إلغاء الربط"), role: .destructive) {
                 if let d = deviceToRevoke {
                     Task { await revoke(d) }
                 }
             }
-            Button("Cancel", role: .cancel) {}
+            Button(SettingsL10n.text("Cancel", "إلغاء"), role: .cancel) {}
         } message: {
             if let d = deviceToRevoke {
-                Text("The device '\(d.device_name ?? "Unknown")' will no longer access this patient profile.")
+                Text(SettingsL10n.text(
+                    "The device '\(d.device_name ?? "Unknown")' will no longer access this patient profile.",
+                    "لن يتمكن الجهاز '\(d.device_name ?? "غير معروف")' من الوصول إلى ملف هذا المريض."
+                ))
             }
         }
+        .environment(\.layoutDirection, SettingsL10n.layoutDirection)
         .refreshable {
             await loadDevices()
         }
@@ -63,38 +72,57 @@ struct LinkedDevicesView: View {
 
     private func deviceRow(_ device: PatientDevice) -> some View {
         HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    Text(device.device_name ?? "Unknown Device")
-                        .bold()
-                    if device.platform == "ios" {
-                        Image(systemName: "applelogo").font(.caption)
-                    }
-                }
-                
-                Group {
-                    if let appVer = device.app_version {
-                        Text("App version: \(appVer)").font(.caption2)
-                    }
-                    if let lastSeen = device.last_seen_at {
-                        Text("Last seen: \(formatDate(lastSeen))").font(.caption2)
-                    }
-                    Text("Linked on: \(formatDate(device.created_at))")
-                        .font(.caption2)
-                }
-                .foregroundColor(.secondary)
+            if isArabic {
+                revokeButton(for: device)
+                Spacer()
+                deviceText(device)
+            } else {
+                deviceText(device)
+                Spacer()
+                revokeButton(for: device)
             }
-            
-            Spacer()
-            
-            Button("Revoke") {
-                deviceToRevoke = device
-            }
-            .buttonStyle(.bordered)
-            .tint(.red)
-            .controlSize(.small)
         }
         .padding(.vertical, 4)
+    }
+
+    private func deviceText(_ device: PatientDevice) -> some View {
+        VStack(alignment: isArabic ? .trailing : .leading, spacing: 4) {
+            HStack {
+                if isArabic, device.platform == "ios" {
+                    Image(systemName: "applelogo").font(.caption)
+                }
+                Text(device.device_name ?? SettingsL10n.text("Unknown Device", "جهاز غير معروف"))
+                    .bold()
+                    .multilineTextAlignment(isArabic ? .trailing : .leading)
+                if !isArabic, device.platform == "ios" {
+                    Image(systemName: "applelogo").font(.caption)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: isArabic ? .trailing : .leading)
+
+            Group {
+                if let appVer = device.app_version {
+                    Text(SettingsL10n.text("App version: \(appVer)", "إصدار التطبيق: \(appVer)")).font(.caption2)
+                }
+                if let lastSeen = device.last_seen_at {
+                    Text(SettingsL10n.text("Last seen: \(formatDate(lastSeen))", "آخر ظهور: \(formatDate(lastSeen))")).font(.caption2)
+                }
+                Text(SettingsL10n.text("Linked on: \(formatDate(device.created_at))", "تم الربط في: \(formatDate(device.created_at))"))
+                    .font(.caption2)
+            }
+            .foregroundColor(.secondary)
+            .multilineTextAlignment(isArabic ? .trailing : .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: isArabic ? .trailing : .leading)
+    }
+
+    private func revokeButton(for device: PatientDevice) -> some View {
+        Button(SettingsL10n.text("Revoke", "إلغاء الربط")) {
+            deviceToRevoke = device
+        }
+        .buttonStyle(.bordered)
+        .tint(.red)
+        .controlSize(.small)
     }
 
     private func loadDevices() async {
@@ -108,7 +136,7 @@ struct LinkedDevicesView: View {
             }
         } catch {
             await MainActor.run {
-                self.errorMessage = "Failed to load devices: \(error.localizedDescription)"
+                self.errorMessage = SettingsL10n.text("Failed to load devices: \(error.localizedDescription)", "تعذر تحميل الأجهزة: \(error.localizedDescription)")
                 self.isLoading = false
             }
         }
@@ -121,7 +149,7 @@ struct LinkedDevicesView: View {
             await loadDevices() // Refresh
         } catch {
             await MainActor.run {
-                self.errorMessage = "Failed to revoke: \(error.localizedDescription)"
+                self.errorMessage = SettingsL10n.text("Failed to revoke: \(error.localizedDescription)", "تعذر إلغاء الربط: \(error.localizedDescription)")
             }
         }
         isRevoking = false

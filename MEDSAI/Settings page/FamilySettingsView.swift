@@ -8,10 +8,11 @@ struct FamilySettingsView: View {
     @State private var showingAddMember = false
     @State private var isLoading = false
     @State private var patients: [PatientProfile] = []
+    @State private var selectedPatient: PatientProfile?
 
     private var isArabic: Bool { languageCode == "ar" }
     
-    struct PatientProfile: Identifiable, Codable {
+    struct PatientProfile: Identifiable, Codable, Hashable {
         let id: String
         let firstName: String
         let lastName: String
@@ -28,65 +29,49 @@ struct FamilySettingsView: View {
         List {
             Section {
                 if patients.isEmpty && !isLoading {
-                    Text("No family members connected yet.")
+                    Text(SettingsL10n.text("No family members connected yet.", "لا يوجد أفراد عائلة مرتبطون حتى الآن."))
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(isArabic ? .trailing : .leading)
                         .padding(.vertical, 8)
                 } else {
                     ForEach(patients) { patient in
-                        NavigationLink {
-                            ManagedPatientSettingsView(patient: patient) {
-                                Task { await loadPatients() }
-                            }
+                        Button {
+                            selectedPatient = patient
                         } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: "person.crop.circle.fill")
-                                    .font(.title2)
-                                    .foregroundStyle(Color.istsehGreen)
-                                    .frame(width: 32)
-
-                                VStack(alignment: isArabic ? .trailing : .leading, spacing: 4) {
-                                    Text(displayName(for: patient))
-                                        .font(.headline)
-
-                                    HStack(spacing: 6) {
-                                        Text(patient.status.capitalized)
-                                            .font(.caption2)
-                                            .padding(.horizontal, 7)
-                                            .padding(.vertical, 3)
-                                            .background(patient.status == "active" ? Color.istsehGreenSoft : .orange.opacity(0.12))
-                                            .clipShape(Capsule())
-                                            .foregroundStyle(patient.status == "active" ? Color.istsehGreen : .orange)
-                                    }
-                                }
-
-                                Spacer()
-                            }
+                            patientNavigationRow(patient)
                         }
+                        .buttonStyle(.plain)
+                        .listRowSeparator(.hidden)
                         .padding(.vertical, 6)
                     }
                 }
             } header: {
-                Text("Family Members")
+                Text(SettingsL10n.text("Family Members", "أفراد العائلة"))
             }
             
             Section {
-                Button {
+                SettingsActionRow(
+                    icon: "person.badge.plus",
+                    text: SettingsL10n.text("Add Family Member", "إضافة فرد من العائلة")
+                ) {
                     showingAddMember = true
-                } label: {
-                    HStack {
-                        Image(systemName: "person.badge.plus")
-                        Text("Add Family Member")
-                    }
-                    .foregroundStyle(Color.istsehGreen)
                 }
             } footer: {
-                Text("Adding a family member allows you to manage their medications and schedule.")
+                Text(SettingsL10n.text(
+                    "Adding a family member allows you to manage their medications and schedule.",
+                    "إضافة فرد من العائلة تتيح لك إدارة أدويته وجدوله."
+                ))
                     .multilineTextAlignment(isArabic ? .trailing : .leading)
             }
+            .listRowSeparator(.hidden)
         }
-        .navigationTitle("Family Members")
+        .navigationTitle(SettingsL10n.text("Family Members", "أفراد العائلة"))
         .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
+        .navigationDestination(item: $selectedPatient) { patient in
+            ManagedPatientSettingsView(patient: patient) {
+                Task { await loadPatients() }
+            }
+        }
         .sheet(isPresented: $showingAddMember) {
             AddFamilyMemberView { _ in
                 Task { await loadPatients() }
@@ -97,6 +82,62 @@ struct FamilySettingsView: View {
 
     private func displayName(for patient: PatientProfile) -> String {
         "\(patient.firstName) \(patient.lastName)".trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var patientIcon: some View {
+        Image(systemName: "person.crop.circle.fill")
+            .font(.title2)
+            .foregroundStyle(Color.istsehGreen)
+            .frame(width: 32)
+    }
+
+    private func patientNavigationRow(_ patient: PatientProfile) -> some View {
+        HStack(spacing: 12) {
+            if isArabic {
+                Image(systemName: "chevron.left")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary.opacity(0.75))
+                    .frame(width: 18)
+                patientText(patient)
+                patientIcon
+            } else {
+                patientIcon
+                patientText(patient)
+                Image(systemName: "chevron.right")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary.opacity(0.75))
+                    .frame(width: 18)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func patientText(_ patient: PatientProfile) -> some View {
+        VStack(alignment: isArabic ? .trailing : .leading, spacing: 4) {
+            Text(displayName(for: patient))
+                .font(.headline)
+                .multilineTextAlignment(isArabic ? .trailing : .leading)
+                .frame(maxWidth: .infinity, alignment: isArabic ? .trailing : .leading)
+
+            Text(localizedStatus(patient.status))
+                .font(.caption2)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(patient.status == "active" ? Color.istsehGreenSoft : .orange.opacity(0.12))
+                .clipShape(Capsule())
+                .foregroundStyle(patient.status == "active" ? Color.istsehGreen : .orange)
+                .frame(maxWidth: .infinity, alignment: isArabic ? .trailing : .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: isArabic ? .trailing : .leading)
+    }
+
+    private func localizedStatus(_ status: String) -> String {
+        guard isArabic else { return status.capitalized }
+        switch status.lowercased() {
+        case "active": return "نشط"
+        case "pending": return "بانتظار القبول"
+        default: return status
+        }
     }
 
     private func loadPatients() async {
@@ -169,15 +210,15 @@ struct CareProfileMenu: View {
                 selectSelf()
             } label: {
                 Label(
-                    "My Profile",
+                    SettingsL10n.text("My Profile", "ملفي الشخصي"),
                     systemImage: settings.activePatientID == nil ? "checkmark.circle.fill" : "person.circle"
                 )
             }
 
             if isLoading {
-                Label("Loading family…", systemImage: "hourglass")
+                Label(SettingsL10n.text("Loading family…", "جاري تحميل العائلة…"), systemImage: "hourglass")
             } else if patients.isEmpty {
-                Label("No family members", systemImage: "person.2.slash")
+                Label(SettingsL10n.text("No family members", "لا يوجد أفراد عائلة"), systemImage: "person.2.slash")
             } else {
                 Divider()
                 ForEach(patients) { patient in
@@ -200,7 +241,7 @@ struct CareProfileMenu: View {
         case .compact:
             HStack(spacing: 5) {
                 Image(systemName: settings.activePatientID == nil ? "person.circle.fill" : "person.crop.circle.badge.checkmark")
-                Text(settings.activePatientID == nil ? "My Profile" : settings.activeCareDisplayName)
+                Text(settings.activePatientID == nil ? SettingsL10n.text("My Profile", "ملفي الشخصي") : settings.activeCareDisplayName)
                     .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
             }
@@ -208,7 +249,7 @@ struct CareProfileMenu: View {
         case .pill:
             HStack(spacing: 7) {
                 Image(systemName: settings.activePatientID == nil ? "person.circle.fill" : "person.crop.circle.badge.checkmark")
-                Text(settings.activePatientID == nil ? "My Profile" : "Managing \(settings.activeCareDisplayName)")
+                Text(settings.activePatientID == nil ? SettingsL10n.text("My Profile", "ملفي الشخصي") : SettingsL10n.managing(settings.activeCareDisplayName))
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
             }
@@ -310,70 +351,84 @@ struct ManagedPatientSettingsView: View {
     var body: some View {
         List {
             Section {
-                Toggle("Can add medications", isOn: $patient.canPatientAddMeds)
+                Toggle(SettingsL10n.text("Can add medications", "يمكنه إضافة الأدوية"), isOn: $patient.canPatientAddMeds)
                     .onChange(of: patient.canPatientAddMeds) { _, _ in Task { await savePermissions() } }
                 
-                Toggle("Can manage calendar", isOn: $patient.canPatientManageCalendar)
+                Toggle(SettingsL10n.text("Can manage calendar", "يمكنه إدارة التقويم"), isOn: $patient.canPatientManageCalendar)
                     .onChange(of: patient.canPatientManageCalendar) { _, _ in Task { await savePermissions() } }
             } header: {
-                Text("Patient Permissions")
+                Text(SettingsL10n.text("Patient Permissions", "صلاحيات المريض"))
             }
 
             Section {
-                Toggle("Medication Reminders", isOn: $patient.notifyPatientMeds)
+                Toggle(SettingsL10n.text("Medication Reminders", "تذكيرات الأدوية"), isOn: $patient.notifyPatientMeds)
                     .onChange(of: patient.notifyPatientMeds) { _, _ in Task { await savePermissions() } }
                 
-                Toggle("Appointment Reminders", isOn: $patient.notifyPatientAppointments)
+                Toggle(SettingsL10n.text("Appointment Reminders", "تذكيرات المواعيد"), isOn: $patient.notifyPatientAppointments)
                     .onChange(of: patient.notifyPatientAppointments) { _, _ in Task { await savePermissions() } }
             } header: {
-                Text("Patient Notifications")
+                Text(SettingsL10n.text("Patient Notifications", "تنبيهات المريض"))
             }
 
             Section {
                 if isTransferring {
-                    TextField("New Caregiver Email", text: $newCaregiverEmail)
+                    SettingsEditableTextRow(
+                        title: SettingsL10n.text("New Caregiver Email", "بريد مقدم الرعاية الجديد"),
+                        placeholder: "caregiver@example.com",
+                        text: $newCaregiverEmail
+                    )
                         .keyboardType(.emailAddress)
                         .textInputAutocapitalization(.none)
                     
-                    Button("Confirm Transfer") {
+                    Button(SettingsL10n.text("Confirm Transfer", "تأكيد النقل")) {
                         Task { await performTransfer() }
                     }
                     .bold()
                     .foregroundStyle(.red)
                     .disabled(newCaregiverEmail.isEmpty || isSaving)
                     
-                    Button("Cancel") {
+                    Button(SettingsL10n.text("Cancel", "إلغاء")) {
                         isTransferring = false
                         newCaregiverEmail = ""
                     }
                     .foregroundStyle(.secondary)
                 } else {
-                    Button("Transfer Patient to Another User") {
+                    SettingsActionRow(
+                        icon: "arrowshape.turn.up.right.fill",
+                        text: SettingsL10n.text("Transfer Patient to Another User", "نقل المريض إلى مستخدم آخر"),
+                        iconColor: .orange
+                    ) {
                         isTransferring = true
                     }
                     .foregroundStyle(.orange)
                 }
             } header: {
-                Text("Transfer Care")
+                Text(SettingsL10n.text("Transfer Care", "نقل الرعاية"))
             } footer: {
-                Text("Transferring will move \(patient.firstName) to a new caregiver. You will lose access immediately.")
+                Text(SettingsL10n.text(
+                    "Transferring will move \(patient.firstName) to a new caregiver. You will lose access immediately.",
+                    "سيتم نقل \(patient.firstName) إلى مقدم رعاية جديد، وستفقد الوصول مباشرة."
+                ))
                     .multilineTextAlignment(isArabic ? .trailing : .leading)
             }
 
             Section {
-                Button(role: .destructive) {
+                SettingsActionRow(
+                    icon: "person.fill.xmark",
+                    text: SettingsL10n.text("Remove Family Member", "إزالة فرد العائلة"),
+                    iconColor: .red
+                ) {
                     showRemoveConfirmation = true
-                } label: {
-                    HStack {
-                        Image(systemName: "person.fill.xmark")
-                        Text("Remove Family Member")
-                    }
                 }
+                .foregroundStyle(.red)
                 .disabled(isSaving)
             } header: {
-                Text("Remove Access")
+                Text(SettingsL10n.text("Remove Access", "إزالة الوصول"))
             } footer: {
-                Text("Removing \(patient.firstName) will stop showing their medications, appointments, and settings in your family list.")
+                Text(SettingsL10n.text(
+                    "Removing \(patient.firstName) will stop showing their medications, appointments, and settings in your family list.",
+                    "إزالة \(patient.firstName) ستوقف ظهور أدويته ومواعيده وإعداداته في قائمة العائلة."
+                ))
                     .multilineTextAlignment(isArabic ? .trailing : .leading)
             }
             
@@ -381,21 +436,24 @@ struct ManagedPatientSettingsView: View {
                 Section {
                     Text(msg)
                         .font(.footnote)
-                        .foregroundStyle(msg.contains("Success") ? Color.istsehGreen : .red)
+                        .foregroundStyle((msg.contains("Success") || msg.contains("نجاح") || msg.contains("تم ")) ? Color.istsehGreen : .red)
                         .multilineTextAlignment(isArabic ? .trailing : .leading)
                 }
             }
         }
-        .navigationTitle("\(patient.firstName)'s Settings")
+        .navigationTitle(SettingsL10n.text("\(patient.firstName)'s Settings", "إعدادات \(patient.firstName)"))
         .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
         .disabled(isSaving)
-        .alert("Remove \(patient.firstName)?", isPresented: $showRemoveConfirmation) {
-            Button("Remove", role: .destructive) {
+        .alert(SettingsL10n.text("Remove \(patient.firstName)?", "إزالة \(patient.firstName)؟"), isPresented: $showRemoveConfirmation) {
+            Button(SettingsL10n.text("Remove", "إزالة"), role: .destructive) {
                 Task { await removeFamilyMember() }
             }
-            Button("Cancel", role: .cancel) { }
+            Button(SettingsL10n.text("Cancel", "إلغاء"), role: .cancel) { }
         } message: {
-            Text("You will no longer be able to manage this family member from your caregiver account.")
+            Text(SettingsL10n.text(
+                "You will no longer be able to manage this family member from your caregiver account.",
+                "لن تتمكن من إدارة هذا الفرد من حساب مقدم الرعاية."
+            ))
         }
         .overlay {
             if isSaving {
@@ -424,7 +482,7 @@ struct ManagedPatientSettingsView: View {
             onUpdate()
         } catch {
             print("⚠️ savePermissions failed for \(pidString):", error)
-            statusMessage = "Failed to update: \(error.localizedDescription)"
+            statusMessage = SettingsL10n.text("Failed to update: \(error.localizedDescription)", "تعذر التحديث: \(error.localizedDescription)")
         }
     }
 
@@ -437,7 +495,7 @@ struct ManagedPatientSettingsView: View {
         
         do {
             try await supabase.transferPatient(id: pid, toEmail: newCaregiverEmail)
-            statusMessage = "Success! Patient transferred."
+            statusMessage = SettingsL10n.text("Success! Patient transferred.", "تم نقل المريض بنجاح.")
             // Context cleanup if needed
             if SupabaseManager.shared.activePatientID == pid {
                 settings.stopActingAsPatient()
@@ -447,7 +505,7 @@ struct ManagedPatientSettingsView: View {
             dismiss()
         } catch {
             print("⚠️ transferPatient failed for \(pidString):", error)
-            statusMessage = "Transfer failed: \(error.localizedDescription)"
+            statusMessage = SettingsL10n.text("Transfer failed: \(error.localizedDescription)", "تعذر النقل: \(error.localizedDescription)")
         }
     }
 
@@ -468,7 +526,7 @@ struct ManagedPatientSettingsView: View {
             dismiss()
         } catch {
             print("⚠️ removeFamilyMember failed for \(pidString):", error)
-            statusMessage = "Remove failed: \(error.localizedDescription)"
+            statusMessage = SettingsL10n.text("Remove failed: \(error.localizedDescription)", "تعذرت الإزالة: \(error.localizedDescription)")
         }
     }
 
@@ -508,10 +566,10 @@ struct AddFamilyMemberView: View {
                 if let code = generatedCode {
                     ISTSEHCard {
                         VStack(spacing: 16) {
-                        Text("Profile Created!")
+                        Text(SettingsL10n.text("Profile Created!", "تم إنشاء الملف!"))
                             .font(.headline)
                         
-                        Text("Share this code with \(firstName):")
+                        Text(SettingsL10n.text("Share this code with \(firstName):", "شارك هذا الرمز مع \(firstName):"))
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
@@ -527,12 +585,12 @@ struct AddFamilyMemberView: View {
                             )
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                         
-                        Text("This code expires in 72 hours.")
+                        Text(SettingsL10n.text("This code expires in 72 hours.", "ينتهي هذا الرمز خلال 72 ساعة."))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(isArabic ? .trailing : .leading)
                         
-                        Button("Copy Code") {
+                        Button(SettingsL10n.text("Copy Code", "نسخ الرمز")) {
                             UIPasteboard.general.string = code
                         }
                         .buttonStyle(.bordered)
@@ -545,22 +603,24 @@ struct AddFamilyMemberView: View {
                     VStack(spacing: 16) {
                     ISTSEHCard {
                         VStack(alignment: isArabic ? .trailing : .leading, spacing: 12) {
-                            Text("Patient Information")
+                            Text(SettingsL10n.text("Patient Information", "معلومات المريض"))
                                 .font(.headline.weight(.semibold))
                                 .foregroundStyle(.primary)
                                 .frame(maxWidth: .infinity, alignment: isArabic ? .trailing : .leading)
 
-                        TextField("First Name", text: $firstName)
-                                .textInputAutocapitalization(.words)
-                                .padding(12)
-                                .background(Color.istsehPageBackground.opacity(0.55))
-                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        TextField("Last Name", text: $lastName)
-                                .textInputAutocapitalization(.words)
-                                .padding(12)
-                                .background(Color.istsehPageBackground.opacity(0.55))
-                                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        DatePicker("Date of Birth", selection: $dob, in: ...Date(), displayedComponents: .date)
+                        SettingsEditableTextRow(
+                            title: SettingsL10n.text("First Name", "الاسم الأول"),
+                            placeholder: SettingsL10n.text("First Name", "الاسم الأول"),
+                            text: $firstName
+                        )
+                        SettingsEditableTextRow(
+                            title: SettingsL10n.text("Last Name", "اسم العائلة"),
+                            placeholder: SettingsL10n.text("Last Name", "اسم العائلة"),
+                            text: $lastName
+                        )
+                        DatePicker(SettingsL10n.text("Date of Birth", "تاريخ الميلاد"), selection: $dob, in: ...Date(), displayedComponents: .date)
+                                .multilineTextAlignment(isArabic ? .trailing : .leading)
+                                .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
                                 .tint(Color.istsehGreen)
                     }
                     }
@@ -579,16 +639,16 @@ struct AddFamilyMemberView: View {
                     
                     ISTSEHCard {
                         VStack(alignment: isArabic ? .trailing : .leading, spacing: 12) {
-                            Text("Initial Permissions")
+                            Text(SettingsL10n.text("Initial Permissions", "الصلاحيات الأولية"))
                                 .font(.headline.weight(.semibold))
                                 .foregroundStyle(.primary)
                                 .frame(maxWidth: .infinity, alignment: isArabic ? .trailing : .leading)
 
-                        Toggle("Can add medications", isOn: $canAddMeds)
-                        Toggle("Can manage calendar", isOn: $canManageCalendar)
-                        Toggle("Medication Reminders", isOn: $notifyMeds)
-                        Toggle("Appointment Reminders", isOn: $notifyApps)
-                        Text("These settings can be changed later in the patient's settings.")
+                        Toggle(SettingsL10n.text("Can add medications", "يمكنه إضافة الأدوية"), isOn: $canAddMeds)
+                        Toggle(SettingsL10n.text("Can manage calendar", "يمكنه إدارة التقويم"), isOn: $canManageCalendar)
+                        Toggle(SettingsL10n.text("Medication Reminders", "تذكيرات الأدوية"), isOn: $notifyMeds)
+                        Toggle(SettingsL10n.text("Appointment Reminders", "تذكيرات المواعيد"), isOn: $notifyApps)
+                        Text(SettingsL10n.text("These settings can be changed later in the patient's settings.", "يمكن تغيير هذه الإعدادات لاحقًا من إعدادات المريض."))
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .multilineTextAlignment(isArabic ? .trailing : .leading)
@@ -610,15 +670,15 @@ struct AddFamilyMemberView: View {
             .padding(.vertical, 18)
             .avoidsTabBar()
             .background(Color.istsehPageBackground.ignoresSafeArea())
-            .navigationTitle("Add Family Member")
+            .navigationTitle(SettingsL10n.text("Add Family Member", "إضافة فرد من العائلة"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Close") { dismiss() }
+                    Button(SettingsL10n.text("Close", "إغلاق")) { dismiss() }
                 }
                 if generatedCode == nil {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("Generate Code") {
+                        Button(SettingsL10n.text("Generate Code", "إنشاء الرمز")) {
                             Task { await generateCode() }
                         }
                         .disabled(firstName.isEmpty || lastName.isEmpty || isSaving)
@@ -632,7 +692,10 @@ struct AddFamilyMemberView: View {
     private func generateCode() async {
         guard supabase.client.auth.currentSession?.user.id != nil else {
             await MainActor.run {
-                errorText = "You must be signed in with a caregiver account to create a family member."
+                errorText = SettingsL10n.text(
+                    "You must be signed in with a caregiver account to create a family member.",
+                    "يجب تسجيل الدخول بحساب مقدم رعاية لإنشاء فرد عائلة."
+                )
             }
             return
         }
@@ -691,7 +754,10 @@ struct AddFamilyMemberView: View {
     private func friendlyErrorMessage(for error: Error) -> String {
         let message = error.localizedDescription.lowercased()
         if message.contains("non-2xx status code: 404") || message.contains("function") && message.contains("not found") {
-            return "The family-member backend function is not deployed yet."
+            return SettingsL10n.text(
+                "The family-member backend function is not deployed yet.",
+                "وظيفة إنشاء أفراد العائلة غير مفعلة في الخادم بعد."
+            )
         }
         return error.localizedDescription
     }

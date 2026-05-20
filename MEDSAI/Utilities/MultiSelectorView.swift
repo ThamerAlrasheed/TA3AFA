@@ -40,6 +40,68 @@ enum MedicalProfileText {
             ? "اضبط روتينك وملفك الطبي والتذكيرات حتى يساعدك استصح في تنظيم أدويتك بطريقة أوضح وأكثر أمانًا."
             : "Set up your routine, medical profile, and reminders so ISTSEH can build a safer medication schedule around your life."
     }
+
+    static func localizedMedicalItem(_ value: String) -> String {
+        guard isArabic else { return value }
+        return arabicMedicalItems[value] ?? value
+    }
+
+    private static let arabicMedicalItems: [String: String] = [
+        "Ibuprofen": "إيبوبروفين",
+        "Aspirin": "أسبرين",
+        "Naproxen": "نابروكسين",
+        "Diclofenac": "ديكلوفيناك",
+        "NSAIDs": "مضادات الالتهاب غير الستيرويدية",
+        "Paracetamol": "باراسيتامول",
+        "Penicillin": "بنسلين",
+        "Amoxicillin": "أموكسيسيلين",
+        "Cephalosporins": "سيفالوسبورينات",
+        "Sulfa Antibiotics": "مضادات حيوية سلفا",
+        "Macrolides": "ماكروليدات",
+        "Fluoroquinolones": "فلوروكينولونات",
+        "Tetracyclines": "تتراسيكلينات",
+        "Insulin": "إنسولين",
+        "Metformin": "ميتفورمين",
+        "ACE Inhibitors": "مثبطات الإنزيم المحول للأنجيوتنسين",
+        "Statins": "ستاتينات",
+        "Opioids": "أفيونات",
+        "Contrast Dye": "صبغة الأشعة",
+        "Latex": "لاتكس",
+        "Peanuts": "الفول السوداني",
+        "Tree Nuts": "المكسرات",
+        "Shellfish": "المحار والقشريات",
+        "Eggs": "البيض",
+        "Milk / Dairy": "الحليب ومشتقاته",
+        "Soy": "الصويا",
+        "Wheat": "القمح",
+        "Sesame": "السمسم",
+        "Diabetes": "السكري",
+        "Hypertension": "ارتفاع ضغط الدم",
+        "High Cholesterol": "ارتفاع الكوليسترول",
+        "Thyroid Disease": "أمراض الغدة الدرقية",
+        "Obesity": "السمنة",
+        "Heart Disease": "أمراض القلب",
+        "Heart Failure": "فشل القلب",
+        "Atrial Fibrillation": "الرجفان الأذيني",
+        "Stroke History": "تاريخ جلطة دماغية",
+        "Asthma": "الربو",
+        "COPD": "مرض الانسداد الرئوي المزمن",
+        "Sleep Apnea": "انقطاع النفس أثناء النوم",
+        "Chronic Kidney Disease": "مرض الكلى المزمن",
+        "Liver Disease": "مرض الكبد",
+        "Epilepsy": "الصرع",
+        "Parkinson's Disease": "مرض باركنسون",
+        "Dementia": "الخرف",
+        "Migraine": "الشقيقة",
+        "Depression": "الاكتئاب",
+        "Anxiety": "القلق",
+        "Bipolar Disorder": "اضطراب ثنائي القطب",
+        "Pregnancy": "الحمل",
+        "Glaucoma": "المياه الزرقاء",
+        "Stomach Ulcer": "قرحة المعدة",
+        "Gout": "النقرس",
+        "Anemia": "فقر الدم"
+    ]
 }
 
 struct MedicalProfileSelectionView: View {
@@ -85,7 +147,7 @@ struct MedicalProfileSelectionView: View {
     var body: some View {
         VStack(alignment: MedicalProfileText.isArabic ? .trailing : .leading, spacing: 16) {
             VStack(alignment: MedicalProfileText.isArabic ? .trailing : .leading, spacing: 4) {
-                Text(title)
+                Text(MedicalProfileText.localizedMedicalItem(title))
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(.primary)
                     .multilineTextAlignment(MedicalProfileText.isArabic ? .trailing : .leading)
@@ -260,7 +322,7 @@ struct SelectableMedicalTag: View {
             )
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("\(showsRemove ? MedicalProfileText.remove : MedicalProfileText.add) \(title)")
+        .accessibilityLabel("\(showsRemove ? MedicalProfileText.remove : MedicalProfileText.add) \(MedicalProfileText.localizedMedicalItem(title))")
     }
 }
 
