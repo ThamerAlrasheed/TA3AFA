@@ -32,6 +32,7 @@ struct SettingsView: View {
 
     @AppStorage("appearance.language") private var languageCode: String =
         Locale.current.language.languageCode?.identifier ?? "en"
+    @State private var showingFAQ = false
 
     #if DEBUG
     @State private var debugSnapshot: DebugContextSnapshot?
@@ -149,6 +150,7 @@ struct SettingsView: View {
             .background(Color.istsehPageBackground.ignoresSafeArea())
             .avoidsTabBar()
             .navigationTitle(SettingsL10n.text("Settings", "الإعدادات"))
+            .navigationBarTitleDisplayMode(.inline)
             .tint(Color.istsehGreen)
             .onAppear {
                 Task {
@@ -171,6 +173,9 @@ struct SettingsView: View {
                 NotificationCenter.default.post(name: NSNotification.Name("UserRoutineChanged"), object: nil)
             }
             .id(languageCode)
+            .navigationDestination(isPresented: $showingFAQ) {
+                FAQView()
+            }
         }
         .environment(\.layoutDirection, languageCode == "ar" ? .rightToLeft : .leftToRight)
     }
@@ -423,12 +428,13 @@ struct SettingsView: View {
                 settings.onboardingCompleted = false
             }
 
-            SettingsLinkRow(
+            SettingsActionRow(
                 icon: "questionmark.circle.fill",
                 text: SettingsL10n.text("FAQ", "الأسئلة الشائعة"),
+                showsChevron: true,
                 showsDivider: true
             ) {
-                FAQView()
+                showingFAQ = true
             }
 
             SettingsActionRow(

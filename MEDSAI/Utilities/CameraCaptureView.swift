@@ -52,7 +52,9 @@ struct CameraCaptureView: View {
         }
         .onDisappear { model.stop() }
         .onReceive(model.$capturedImage.compactMap { $0 }) { img in
-            onImage(img); dismiss()
+            onImage(img)
+            model.clearCapturedImage()
+            dismiss()
         }
         .alert("Camera Error", isPresented: $model.showError) {
             Button("OK") { model.clearError() }
@@ -109,7 +111,16 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         }
     }
 
-    // MARK: Capture
+    private func bestSupportedPhotoQualityPrioritization() -> AVCapturePhotoOutput.QualityPrioritization {
+        let maxPrioritization = photoOutput.maxPhotoQualityPrioritization
+        if maxPrioritization.rawValue >= AVCapturePhotoOutput.QualityPrioritization.quality.rawValue {
+            return .quality
+        } else if maxPrioritization.rawValue >= AVCapturePhotoOutput.QualityPrioritization.balanced.rawValue {
+            return .balanced
+        } else {
+            return .speed
+        }
+    }
 
     func capturePhoto() {
         guard isReady, session.isRunning else { return }
@@ -117,11 +128,24 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
         let settings = AVCapturePhotoSettings()
         settings.flashMode = .off
         
+        let prioritization = bestSupportedPhotoQualityPrioritization()
+        settings.photoQualityPrioritization = prioritization
+        
+        #if DEBUG
+        print("Camera max photo quality prioritization:", photoOutput.maxPhotoQualityPrioritization)
+        print("Using photo quality prioritization:", settings.photoQualityPrioritization)
+        #endif
+        
         // Use newer API if available for high res
         if #available(iOS 17.0, *) {
-            // maxPhotoDimensions is preferred
+            let maxDimensions = photoOutput.maxPhotoDimensions
+            if maxDimensions.width > 0 && maxDimensions.height > 0 {
+                settings.maxPhotoDimensions = maxDimensions
+            }
         } else {
-            settings.isHighResolutionPhotoEnabled = true 
+            if photoOutput.isHighResolutionCaptureEnabled {
+                settings.isHighResolutionPhotoEnabled = true 
+            }
         }
         
         photoOutput.capturePhoto(with: settings, delegate: self)
@@ -136,14 +160,19 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
             Task { @MainActor in self.present(error.localizedDescription); self.isCapturing = false }
             return
         }
-        guard let data = photo.fileDataRepresentation(),
-              let img = UIImage(data: data) else {
+        guard let data = photo.fileDataRepresentation() else {
             Task { @MainActor in self.present("Could not read image data."); self.isCapturing = false }
             return
         }
-        let normalized = img.fixedOrientation()
+        let fullResImage = autoreleasepool {
+            UIImage(data: data)?.fixedOrientation()
+        }
+        guard let fullResImage else {
+            Task { @MainActor in self.present("Could not read image data."); self.isCapturing = false }
+            return
+        }
         Task { @MainActor in
-            self.capturedImage = normalized
+            self.capturedImage = fullResImage
             self.isCapturing = false
         }
     }
@@ -181,6 +210,18 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
                             throw NSError(domain: "Camera", code: 4, userInfo: [NSLocalizedDescriptionKey: "Cannot add photo output."])
                         }
                         self.session.addOutput(self.photoOutput)
+                        
+                        if #available(iOS 17.0, *) {
+                            let supportedDimensions = device.activeFormat.supportedMaxPhotoDimensions
+                            if let lastDim = supportedDimensions.last {
+                                self.photoOutput.maxPhotoDimensions = lastDim
+                            }
+                        } else {
+                            let dims = device.activeFormat.highResolutionStillImageDimensions
+                            if dims.width > 0 && dims.height > 0 {
+                                self.photoOutput.isHighResolutionCaptureEnabled = true
+                            }
+                        }
                     }
 
                     self.session.commitConfiguration()
@@ -211,6 +252,8 @@ final class CameraModel: NSObject, ObservableObject, AVCapturePhotoCaptureDelega
     }
 
     func clearError() { errorMessage = nil; showError = false }
+
+    func clearCapturedImage() { capturedImage = nil }
 }
 
 // MARK: - Preview Layer
@@ -266,19 +309,5 @@ struct CameraPreview: UIViewRepresentable {
     final class PreviewView: UIView {
         override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
         var videoPreviewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
-    }
-}
-
-// MARK: - Utilities
-
-private extension UIImage {
-    /// Normalize orientation to .up
-    func fixedOrientation() -> UIImage {
-        guard imageOrientation != .up else { return self }
-        UIGraphicsBeginImageContextWithOptions(size, false, scale)
-        draw(in: CGRect(origin: .zero, size: size))
-        let img = UIGraphicsGetImageFromCurrentImageContext()
-        UIGraphicsEndImageContext()
-        return img ?? self
     }
 }

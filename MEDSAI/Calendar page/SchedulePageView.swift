@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Calendar page – calendar picker at the top, then Appointments, then Doses.
+/// Calendar page: date picker plus the shared daily board used by Today.
 struct SchedulePageView: View {
     @EnvironmentObject var settings: AppSettings
 
@@ -9,9 +9,13 @@ struct SchedulePageView: View {
 
     @State private var selectedDate: Date = Date()
     @State private var dayDoses: [(Date, LocalMed)] = []
+    @State private var completedAppointments: Set<String> = CompletionStore.completedAppointments()
+    @State private var completedDoseKeys: Set<String> = CompletionStore.completedDoses()
+    @State private var skippedDoseKeys: Set<String> = DailyDoseStatusStore.skippedDoses()
 
     @State private var showAddAppointment = false
     @State private var editingAppointment: Appointment? = nil
+    @State private var viewingMedication: LocalMed? = nil
 
     private var canEditAppointments: Bool {
         if settings.role == .patient {
@@ -22,27 +26,22 @@ struct SchedulePageView: View {
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 20) {
-                    // Calendar picker — inline at top
-                    CalendarView(selection: $selectedDate, initialMode: .monthly)
-                        .padding(.bottom, 4)
+            VStack(spacing: 0) {
+                CalendarView(selection: $selectedDate, initialMode: .monthly)
+                    .padding(.top, 8)
+                    .padding(.bottom, 4)
 
-                    Divider().padding(.horizontal)
+                Divider()
 
-                    // Appointments
-                    appointmentsBlock
-
-                    // Doses
-                    dosesBlock
-                }
-                .padding(.bottom, 100)
+                content
             }
             .background(Color.istsehPageBackground.ignoresSafeArea())
-            .navigationTitle("Calendar")
+            .navigationTitle(isArabic ? "الجدول" : "Calendar")
+            .navigationBarTitleDisplayMode(.inline)
             .refreshable {
                 repo.start()
                 appts.start()
+                refreshCompletionState()
             }
             .toolbar {
                 if settings.role == .caregiver {
@@ -55,19 +54,31 @@ struct SchedulePageView: View {
                         .environmentObject(settings)
                     }
                 }
+
+                if canEditAppointments {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button {
+                            showAddAppointment = true
+                        } label: {
+                            Image(systemName: "plus")
+                        }
+                        .accessibilityLabel("Add appointment")
+                    }
+                }
             }
             .onAppear {
                 repo.start()
                 appts.start()
                 recomputeDoses()
+                refreshCompletionState()
             }
             .onChange(of: selectedDate) { _, _ in recomputeDoses() }
             .onChange(of: repo.meds) { _, _ in recomputeDoses() }
             .onChange(of: settings.breakfast) { _, _ in recomputeDoses() }
-            .onChange(of: settings.lunch)     { _, _ in recomputeDoses() }
-            .onChange(of: settings.dinner)    { _, _ in recomputeDoses() }
-            .onChange(of: settings.bedtime)   { _, _ in recomputeDoses() }
-            .onChange(of: settings.wakeup)    { _, _ in recomputeDoses() }
+            .onChange(of: settings.lunch) { _, _ in recomputeDoses() }
+            .onChange(of: settings.dinner) { _, _ in recomputeDoses() }
+            .onChange(of: settings.bedtime) { _, _ in recomputeDoses() }
+            .onChange(of: settings.wakeup) { _, _ in recomputeDoses() }
             .onChange(of: settings.activePatientID) { _, _ in
                 repo.start()
                 appts.start()
@@ -79,185 +90,78 @@ struct SchedulePageView: View {
             .sheet(item: $editingAppointment) { appt in
                 AddAppointmentView(repo: appts, defaultDate: selectedDate, existing: appt)
             }
+            .sheet(item: $viewingMedication) { med in
+                NavigationStack {
+                    MedDetailView(medName: med.name, catalogId: med.catalogId, med: med)
+                }
+                .presentationDetents([.medium, .large])
+            }
         }
         .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
     }
 
-    // MARK: - Appointments block (above doses)
-    private var appointmentsBlock: some View {
-        SectionCard {
-            SectionHeader(title: sectionTitle("Appointments"))
-
-            let items = appts.appointments(on: selectedDate)
-
-            if appts.isLoading {
-                rowPadding(
-                    BrandedLoadingView(message: LoadingMessage.appointments.text, style: .inline)
-                )
-            } else if let err = appts.errorMessage {
-                rowPadding(
-                    ContentUnavailableView(LoadingMessage.scheduleError.text,
-                                           systemImage: "exclamationmark.triangle",
-                                           description: Text(err))
-                )
-            } else if items.isEmpty {
-                rowPadding(
-                    VStack(alignment: .center, spacing: 10) {
-                        ISTSEHInlineEmptyState(
-                            systemImage: "calendar.badge.clock",
-                            title: LoadingMessage.noAppointmentsOnDay.text
-                        )
-
-                        if canEditAppointments {
-                            HStack {
-                                Spacer()
-                                CenteredPillButton(title: "Add appointment") {
-                                    showAddAppointment = true
-                                }
-                                .frame(maxWidth: 260)
-                                Spacer()
-                            }
-                        }
-                    }
-                )
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(items) { appt in
-                        VStack(alignment: isArabic ? .trailing : .leading, spacing: 6) {
-                            HStack(alignment: .top, spacing: 12) {
-                                VStack(alignment: isArabic ? .trailing : .leading, spacing: 2) {
-                                    Text(appt.titleWithEmoji)
-                                        .font(.headline)
-                                        .foregroundStyle(.primary)
-                                        .multilineTextAlignment(isArabic ? .trailing : .leading)
-                                    if let loc = appt.location, !loc.isEmpty {
-                                        Text(loc)
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                            .multilineTextAlignment(isArabic ? .trailing : .leading)
-                                    }
-                                    if let notes = appt.notes, !notes.isEmpty {
-                                        Text(notes)
-                                            .font(.subheadline)
-                                            .foregroundStyle(.secondary)
-                                            .lineLimit(2)
-                                            .multilineTextAlignment(isArabic ? .trailing : .leading)
-                                    }
-                                }
-
-                                Spacer()
-
-                                Text(timeOnly(appt.date))
-                                    .font(.headline)
-                                    .monospacedDigit()
-                                    .foregroundStyle(.primary)
-
-                                if canEditAppointments {
-                                    Menu {
-                                        Button { editingAppointment = appt } label: {
-                                            Label("Edit", systemImage: "pencil")
-                                        }
-                                        Button(role: .destructive) {
-                                            Task { await appts.delete(appt) }
-                                        } label: {
-                                            Label("Delete", systemImage: "trash")
-                                        }
-                                    } label: {
-                                        Image(systemName: "ellipsis.circle")
-                                            .font(.title3)
-                                            .foregroundStyle(.secondary)
-                                            .padding(isArabic ? .trailing : .leading, 4)
-                                            .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                }
-                            }
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-
-                        Divider().padding(isArabic ? .trailing : .leading, 16)
-                    }
-
-                    if canEditAppointments {
-                        // Centered "Add appointment" pill under list
-                        HStack {
-                            Spacer()
-                            CenteredPillButton(title: "Add appointment") {
-                                showAddAppointment = true
-                            }
-                            .frame(maxWidth: 260)
-                            Spacer()
-                        }
-                        .padding(.top, 8)
-                        .padding(.bottom, 8)
-                    }
-                }
-            }
+    @ViewBuilder
+    private var content: some View {
+        if (repo.isLoading || appts.isLoading) && !repo.hasLoadedOnce && repo.meds.isEmpty {
+            ISTSEHLoadingView(
+                message: LoadingMessage.custom("Loading schedule", "جاري تحميل الجدول").text,
+                style: .fullScreen
+            )
+        } else if let errorMessage = repo.errorMessage ?? appts.errorMessage, repo.meds.isEmpty && appts.items.isEmpty {
+            ContentUnavailableView(
+                LoadingMessage.scheduleError.text,
+                systemImage: "exclamationmark.triangle",
+                description: Text(errorMessage)
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            DailyBoardView(
+                selectedDate: selectedDate,
+                medicationGroups: selectedDayMedicationGroups,
+                appointmentGroups: selectedDayAppointmentGroups,
+                onToggleDose: toggleDose,
+                onSkipDose: skipDose,
+                onOpenMedication: openMedication,
+                onToggleAppointment: toggleAppointment,
+                onOpenAppointment: openAppointment
+            )
         }
     }
 
-    // MARK: - Doses block (read-only, with empty state)
-    private var dosesBlock: some View {
-        SectionCard {
-            SectionHeader(title: sectionTitle("Doses"))
-
-            if repo.isLoading {
-                rowPadding(
-                    BrandedLoadingView(message: LoadingMessage.medications.text, style: .inline)
-                )
-            } else if let err = repo.errorMessage {
-                rowPadding(
-                    ContentUnavailableView(LoadingMessage.scheduleError.text,
-                                           systemImage: "exclamationmark.triangle",
-                                           description: Text(err))
-                )
-            } else if dayDoses.isEmpty {
-                rowPadding(
-                    ISTSEHInlineEmptyState(
-                        systemImage: "calendar.badge.exclamationmark",
-                        title: LoadingMessage.noDosesOnDay.text
-                    )
-                )
-            } else {
-                VStack(spacing: 0) {
-                    ForEach(dayDoses.indices, id: \.self) { i in
-                        let pair = dayDoses[i]
-                        let time = pair.0
-                        let med  = pair.1
-
-                        HStack(spacing: 12) {
-                            MedicationVisualView(
-                                form: med.medicationForm,
-                                shapeID: med.visualShape,
-                                medicationColorID: med.visualColor,
-                                backgroundColorID: med.visualBackgroundColor,
-                                size: 40
-                            )
-                            VStack(alignment: isArabic ? .trailing : .leading, spacing: 2) {
-                                Text(med.doseActionText(isArabic: isArabic)).font(.headline)
-                                    .multilineTextAlignment(isArabic ? .trailing : .leading)
-                                Text(medicationSubtitle(med))
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
-                                    .multilineTextAlignment(isArabic ? .trailing : .leading)
-                            }
-                            Spacer()
-                            Text(time.formatted(date: .omitted, time: .shortened))
-                                .font(.headline)
-                                .monospacedDigit()
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-
-                        Divider().padding(isArabic ? .trailing : .leading, 16)
-                    }
-                }
-            }
-        }
+    private var selectedDayMedicationGroups: [DailyMedicationGroup] {
+        DailyBoardBuilder.buildMedicationGroups(
+            medications: repo.meds,
+            doseItems: dayDoses.map(doseDisplayItem),
+            for: selectedDate
+        )
     }
 
-    // MARK: - Build Doses for selected day (READ-ONLY)
+    private var selectedDayAppointmentGroups: [DailyAppointmentGroup] {
+        DailyBoardBuilder.buildAppointmentGroups(
+            appointments: appts.appointments(on: selectedDate),
+            completedAppointmentIDs: completedAppointments,
+            for: selectedDate
+        )
+    }
+
+    private func doseDisplayItem(for pair: (Date, LocalMed)) -> DailyDoseDisplayItem {
+        let key = doseKey(time: pair.0, medID: pair.1.id)
+        return DailyDoseDisplayItem(
+            id: key,
+            medicationID: pair.1.id,
+            scheduledAt: pair.0,
+            displayTime: pair.0.formatted(date: .omitted, time: .shortened),
+            status: doseStatus(for: key, scheduledAt: pair.0)
+        )
+    }
+
+    private func doseStatus(for key: String, scheduledAt: Date) -> DoseDisplayStatus {
+        if skippedDoseKeys.contains(key) { return .skipped }
+        if completedDoseKeys.contains(key) { return .taken }
+        if scheduledAt < Date() { return .missed }
+        return .pending
+    }
+
     private func recomputeDoses() {
         guard repo.isSignedIn else {
             dayDoses = []
@@ -268,15 +172,10 @@ struct SchedulePageView: View {
             guard !med.isArchived else { return false }
             return med.isScheduled(on: selectedDate)
         }
-        if active.isEmpty {
-            dayDoses = []
-            return
-        }
 
-        let display: [(Date, LocalMed)] = active.flatMap { med in
+        dayDoses = DoseTextFormatter.deduplicatedDosePairs(active.flatMap { med in
             doseDates(for: med, on: selectedDate).map { ($0, med) }
-        }
-        dayDoses = display.sorted { $0.0 < $1.0 }
+        })
     }
 
     private func doseDates(for med: LocalMed, on date: Date) -> [Date] {
@@ -287,7 +186,7 @@ struct SchedulePageView: View {
             guard parts.count >= 2, let hour = Int(parts[0]), let minute = Int(parts[1]) else { return nil }
             return cal.date(bySettingHour: hour, minute: minute, second: 0, of: base)
         }
-        if !explicitTimes.isEmpty { return explicitTimes }
+        if !explicitTimes.isEmpty { return DoseTextFormatter.deduplicatedDoseDates(explicitTimes, calendar: cal) }
 
         let adapted = Medication(
             id: med.id,
@@ -305,102 +204,92 @@ struct SchedulePageView: View {
             asNeeded: med.asNeeded,
             isManualSchedule: med.isManualSchedule
         )
-        return Scheduler.preferredTimes(for: adapted, on: base, settings: settings)
+        return DoseTextFormatter.deduplicatedDoseDates(
+            Scheduler.preferredTimes(for: adapted, on: base, settings: settings),
+            calendar: cal
+        )
     }
 
-    // MARK: - Formatting helpers
-    private func sectionTitle(_ base: String) -> String {
-        let df = DateFormatter()
-        df.dateStyle = .full
-        df.timeStyle = .none
-        return "\(base) – \(df.string(from: selectedDate))"
+    private func toggleAppointment(_ item: DailyAppointmentDisplayItem) {
+        if completedAppointments.contains(item.appointmentID) {
+            completedAppointments.remove(item.appointmentID)
+        } else {
+            completedAppointments.insert(item.appointmentID)
+        }
+        CompletionStore.setCompletedAppointments(completedAppointments)
     }
 
-    private func foodRuleLabel(_ rule: FoodRule) -> String {
-        switch rule {
-        case .beforeFood: return "Before food"
-        case .afterFood:  return "After food"
-        case .withFood:   return "With food"
-        case .avoidWithFood: return "Avoid with food"
-        case .notSure: return "Not sure"
-        case .none:       return "No food rule"
+    private func toggleDose(_ item: DailyDoseDisplayItem) {
+        let isDone: Bool
+        if completedDoseKeys.contains(item.id), !skippedDoseKeys.contains(item.id) {
+            completedDoseKeys.remove(item.id)
+            isDone = false
+        } else {
+            completedDoseKeys.insert(item.id)
+            skippedDoseKeys.remove(item.id)
+            isDone = true
+        }
+        persistDoseState()
+        NotificationsManager.shared.cancel(ids: ["DOSE_FU_\(item.id)"])
+
+        if isDone {
+            Task {
+                do {
+                    try await SupabaseManager.shared.recordDoseEvent(
+                        medId: item.medicationID,
+                        scheduledAt: item.scheduledAt,
+                        status: .taken
+                    )
+                } catch {
+                    print("⚠️ Failed to sync dose event:", error)
+                }
+            }
         }
     }
 
-    private func medicationSubtitle(_ med: LocalMed) -> String {
-        let food = MedicationFormRules.shouldShowFoodTiming(
-            formID: med.medicationForm,
-            foodRule: med.foodRule,
-            sourceBacked: med.foodRuleSource == "source"
-        ) ? med.foodRuleLabel(isArabic: isArabic) : nil
-        return [med.scheduleSummary(isArabic: isArabic), food]
-            .compactMap { $0 }
-            .joined(separator: " • ")
+    private func skipDose(_ item: DailyDoseDisplayItem) {
+        completedDoseKeys.insert(item.id)
+        skippedDoseKeys.insert(item.id)
+        persistDoseState()
+
+        Task {
+            do {
+                try await SupabaseManager.shared.recordDoseEvent(
+                    medId: item.medicationID,
+                    scheduledAt: item.scheduledAt,
+                    status: .skipped
+                )
+            } catch {
+                print("⚠️ Failed to sync skipped event:", error)
+            }
+        }
+    }
+
+    private func openMedication(_ group: DailyMedicationGroup) {
+        viewingMedication = repo.meds.first { $0.id == group.medicationID }
+    }
+
+    private func openAppointment(_ item: DailyAppointmentDisplayItem?) {
+        guard canEditAppointments, let item else { return }
+        editingAppointment = appts.items.first { $0.id == item.appointmentID }
+    }
+
+    private func refreshCompletionState() {
+        completedAppointments = CompletionStore.completedAppointments()
+        completedDoseKeys = CompletionStore.completedDoses()
+        skippedDoseKeys = DailyDoseStatusStore.skippedDoses()
+    }
+
+    private func persistDoseState() {
+        CompletionStore.setCompletedDoses(completedDoseKeys)
+        DailyDoseStatusStore.setSkippedDoses(skippedDoseKeys)
+    }
+
+    private func doseKey(time: Date, medID: String) -> String {
+        NotificationsManager.medicationDoseKey(medID: medID, scheduledAt: time)
     }
 
     private var isArabic: Bool {
         UserDefaults.standard.string(forKey: "appearance.language") == "ar"
-    }
-
-    private func timeOnly(_ date: Date) -> String {
-        date.formatted(date: .omitted, time: .shortened)
-    }
-
-    private func rowPadding<V: View>(_ v: V) -> some View {
-        v.padding(.horizontal, 16).padding(.vertical, 12)
-    }
-}
-
-// MARK: - Section chrome (List-like look without List)
-private struct SectionCard<Content: View>: View {
-    @Environment(\.layoutDirection) private var layoutDirection
-    let content: Content
-    init(@ViewBuilder content: () -> Content) { self.content = content() }
-
-    var body: some View {
-        VStack(alignment: layoutDirection == .rightToLeft ? .trailing : .leading, spacing: 0) {
-            content
-        }
-        .background(Color.istsehCard)
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.istsehCardStroke, lineWidth: 1)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 12))
-        .padding(.horizontal, 12)
-        .padding(.top, 12)
-    }
-}
-
-private struct SectionHeader: View {
-    @Environment(\.layoutDirection) private var layoutDirection
-    let title: String
-    var body: some View {
-        Text(title)
-            .font(.headline)
-            .multilineTextAlignment(layoutDirection == .rightToLeft ? .trailing : .leading)
-            .frame(maxWidth: .infinity, alignment: layoutDirection == .rightToLeft ? .trailing : .leading)
-            .padding(.horizontal, 16)
-            .padding(.top, 12)
-            .padding(.bottom, 8)
-    }
-}
-
-// MARK: - Button
-private struct CenteredPillButton: View {
-    let title: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text(title)
-                .font(.headline)
-                .foregroundColor(.white)
-                .frame(minWidth: 160, maxWidth: .infinity, minHeight: 44, maxHeight: 44)
-                .contentShape(Rectangle())
-        }
-        .background(Color.istsehGreen)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
     }
 }

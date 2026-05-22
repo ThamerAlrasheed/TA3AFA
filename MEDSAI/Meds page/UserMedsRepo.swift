@@ -56,6 +56,11 @@ final class UserMedsRepo: ObservableObject {
         let refill_reminder_date: String?
         let refill_reminder_mode: String?
         let refill_notes: String?
+        let scan_source: String?
+        let scan_confidence: Double?
+        let scan_confirmed_by_user: Bool?
+        let scan_extracted_fields: MedicationExtractedFields?
+        let scan_candidate_snapshot: [MedicationScanCandidate]?
         let custom_form_text: String?
         let custom_unit_text: String?
         let source_metadata: String?
@@ -81,6 +86,10 @@ final class UserMedsRepo: ObservableObject {
         let end_date: String
         let notes: String?
         let is_active: Bool
+        let visual_shape: String?
+        let visual_color: String?
+        let visual_background_color: String?
+        let medication_form: String?
     }
 
     private struct ArchivePayload: Encodable {
@@ -89,7 +98,9 @@ final class UserMedsRepo: ObservableObject {
 
     @Published private(set) var meds: [LocalMed] = []
     @Published private(set) var isLoading = false
+    @Published private(set) var hasLoadedOnce = false
     @Published private(set) var errorMessage: String?
+    @Published var saveErrorMessage: String?
     @Published private(set) var isSignedIn = false
     @Published private(set) var canAddMeds = true
     @Published private(set) var canManageCalendar = true
@@ -101,6 +112,7 @@ final class UserMedsRepo: ObservableObject {
 
     private var supabase: SupabaseManager { .shared }
     private var cancellables = Set<AnyCancellable>()
+    private var lastSafetyWarningMedicationIDs: Set<String> = []
 
     init() {
         NotificationCenter.default.publisher(for: NSNotification.Name("SupabaseContextChanged"))
@@ -123,16 +135,51 @@ final class UserMedsRepo: ObservableObject {
 
     func start() {
         isSignedIn = supabase.currentUserID != nil
-        guard isSignedIn else { meds = []; errorMessage = nil; return }
+        guard isSignedIn else {
+            meds = []
+            errorMessage = nil
+            isLoading = false
+            return
+        }
         Task { await fetchMeds() }
     }
 
     func fetchMeds() async {
-        guard let uid = supabase.currentUserID else { return }
-        let uidString = uid.uuidString.lowercased()
-        isLoading = true; errorMessage = nil; meds = []
+        let ownerContext: MedicationOwnerContext
         do {
-            if supabase.isPatientMode || supabase.activePatientID != nil {
+            ownerContext = try supabase.resolveMedicationOwnerContext()
+        } catch {
+            print("MED FETCH DEBUG error resolving owner:", error)
+            isSignedIn = false
+            meds = []
+            errorMessage = nil
+            isLoading = false
+            return
+        }
+
+        let uidString = supabase.ownerIDString(from: ownerContext).lowercased()
+        isSignedIn = true
+
+        print("MED FETCH DEBUG")
+        print("currentAuthUserID:", supabase.authenticatedUserID as Any)
+        print("activePatientID:", supabase.activePatientID as Any)
+        print("resolvedFetchOwnerID:", uidString)
+        print("fetch mode:", (supabase.activePatientID == nil && !supabase.isPatientMode) ? "self" : "patient/caregiver")
+
+        // Only show full-screen loading on initial load (when we have no data yet)
+        let isFirstLoad = !hasLoadedOnce && meds.isEmpty
+        if isFirstLoad {
+            isLoading = true
+        }
+        errorMessage = nil
+        // DO NOT clear meds here — keep last-known-good state visible
+        defer {
+            isLoading = false
+        }
+
+        do {
+            switch ownerContext {
+            case .patient:
                 let context = try await self.supabase.fetchPatientMedicationContext()
                 self.canAddMeds = context.canAddMeds
                 self.canManageCalendar = context.canManageCalendar
@@ -143,69 +190,49 @@ final class UserMedsRepo: ObservableObject {
                 debugMedicationLoad(rows: context.medications, loadedMeds: loadedMeds, source: "patient-medications")
                 #endif
                 self.meds = loadedMeds
-                isLoading = false
+                self.hasLoadedOnce = true
                 loadedMeds.forEach { NotificationsManager.shared.updateReminders(for: $0) }
                 await refreshSafetyWarnings(for: loadedMeds)
                 return
-            }
 
-            // 1. Fetch Permission if needed (Only for patients or impersonated contexts)
-            if uid != supabase.authenticatedUserID || supabase.isPatientMode {
-                struct PermissionRow: Decodable {
-                    let can_patient_add_meds: Bool
-                    let can_patient_manage_calendar: Bool
-                    let notify_patient_meds: Bool
-                    let notify_patient_appointments: Bool
-                }
-                let perms: [PermissionRow] = try await self.supabase.retry {
-                    try await self.supabase.client
-                        .from("caregiver_relations")
-                        .select("can_patient_add_meds, can_patient_manage_calendar, notify_patient_meds, notify_patient_appointments")
-                        .eq("patient_id", value: uidString)
-                        .execute()
-                        .value
-                }
-                
-                if let first = perms.first {
-                    self.canAddMeds = first.can_patient_add_meds
-                    self.canManageCalendar = first.can_patient_manage_calendar
-                    self.notifyMeds = first.notify_patient_meds
-                    self.notifyAppointments = first.notify_patient_appointments
-                } else {
-                    self.canAddMeds = true
-                    self.canManageCalendar = true
-                    self.notifyMeds = true
-                    self.notifyAppointments = true
-                }
-            } else {
+            case .selfUser:
                 self.canAddMeds = true
                 self.canManageCalendar = true
                 self.notifyMeds = true
                 self.notifyAppointments = true
-            }
 
-            // 2. Fetch Meds
-            let rows: [LocalMed.DBRow] = try await self.supabase.retry {
-                try await self.supabase.client
-                    .from("user_medications")
-                    .select("*, medications(name, food_rule, rxcui, active_ingredients)")
-                    .eq("user_id", value: uidString)
-                    .eq("is_active", value: true)
-                    .execute()
-                    .value
+                // 2. Fetch Meds
+                let rows: [LocalMed.DBRow] = try await self.supabase.retry {
+                    try await self.supabase.client
+                        .from("user_medications")
+                        .select("*, medications(name, food_rule, rxcui, active_ingredients)")
+                        .eq("user_id", value: uidString)
+                        .eq("is_active", value: true)
+                        .execute()
+                        .value
+                }
+                let loadedMeds = rows.compactMap { LocalMed(row: $0) }
+                #if DEBUG
+                debugMedicationLoad(rows: rows, loadedMeds: loadedMeds, source: "user_medications")
+                #endif
+                self.meds = loadedMeds
+                self.hasLoadedOnce = true
+                loadedMeds.forEach { NotificationsManager.shared.updateReminders(for: $0) }
+                await refreshSafetyWarnings(for: loadedMeds)
             }
-            let loadedMeds = rows.compactMap { LocalMed(row: $0) }
+        } catch is CancellationError {
             #if DEBUG
-            debugMedicationLoad(rows: rows, loadedMeds: loadedMeds, source: "user_medications")
+            print("fetchMeds cancelled for \(uidString). Keeping \(meds.count) existing meds.")
             #endif
-            self.meds = loadedMeds
-            loadedMeds.forEach { NotificationsManager.shared.updateReminders(for: $0) }
-            await refreshSafetyWarnings(for: loadedMeds)
+            // Keep old data — do NOT clear meds
         } catch {
-            print("⚠️ fetchMeds failed for \(uidString):", error)
-            errorMessage = "Unable to fetch medications (\(error.localizedDescription))."
+            print("MED FETCH ERROR:", error)
+            // Only set error if we never successfully loaded
+            if !hasLoadedOnce {
+                errorMessage = "Unable to fetch medications (\(error.localizedDescription))."
+            }
+            // Keep old meds visible
         }
-        isLoading = false
     }
 
     func safetyWarnings(for med: LocalMed) -> [SafetyWarning] {
@@ -220,8 +247,13 @@ final class UserMedsRepo: ObservableObject {
         guard !meds.isEmpty else {
             safetyWarningsByMedID = [:]
             safetySourceTrace = []
+            lastSafetyWarningMedicationIDs = []
             return
         }
+
+        let ids = Set(meds.map(\.id))
+        guard ids != lastSafetyWarningMedicationIDs else { return }
+        guard !isRefreshingSafetyWarnings else { return }
 
         let inputs = meds.map {
             SafetyMedicationInput(
@@ -234,6 +266,7 @@ final class UserMedsRepo: ObservableObject {
 
         isRefreshingSafetyWarnings = true
         defer { isRefreshingSafetyWarnings = false }
+        lastSafetyWarningMedicationIDs = ids
 
         do {
             let response = try await DrugInfo.checkSafety(
@@ -245,6 +278,10 @@ final class UserMedsRepo: ObservableObject {
 
             safetySourceTrace = response.source_trace
             safetyWarningsByMedID = Self.mapWarnings(response.warnings, to: meds)
+        } catch is CancellationError {
+            #if DEBUG
+            print("refresh safety warnings cancelled")
+            #endif
         } catch {
             print("⚠️ refresh safety warnings failed:", error)
             safetyWarningsByMedID = [:]
@@ -284,14 +321,21 @@ final class UserMedsRepo: ObservableObject {
     // MARK: - CRUD
 
     func add(_ med: LocalMed) async {
-        guard let uid = supabase.currentUserID else { return }
-        let uidString = uid.uuidString.lowercased()
+        let ownerContext: MedicationOwnerContext
+        do {
+            ownerContext = try supabase.resolveMedicationOwnerContext()
+        } catch {
+            print("MED SAVE ERROR resolving owner:", error)
+            saveErrorMessage = error.localizedDescription
+            return
+        }
+        let uidString = supabase.ownerIDString(from: ownerContext).lowercased()
 
         #if DEBUG
         debugMedicationSaveStarted(med, ownerID: uidString, endpoint: supabase.isPatientMode || supabase.activePatientID != nil ? "patient-medications" : "user_medications")
         #endif
 
-        if supabase.isPatientMode || supabase.activePatientID != nil {
+        if case .patient = ownerContext {
             do {
                 try await supabase.savePatientMedication(med)
                 await fetchMeds()
@@ -299,13 +343,14 @@ final class UserMedsRepo: ObservableObject {
                 debugMedicationRefreshStatus(errorMessage)
                 #endif
                 NotificationsManager.shared.updateReminders(for: med)
+                print("MED SAVE SUCCESS id:", med.id)
             } catch {
                 #if DEBUG
-                debugMedicationSaveFailure(med, ownerID: supabase.currentUserID?.uuidString.lowercased() ?? "unknown", table: "patient-medications", error: "\(error)")
+                debugMedicationSaveFailure(med, ownerID: uidString, table: "patient-medications", error: "\(error)")
                 #else
                 print("⚠️ patient add med failed:", error)
                 #endif
-                errorMessage = localizedMedicationSaveError()
+                saveErrorMessage = localizedMedicationSaveError()
             }
             return
         }
@@ -342,7 +387,7 @@ final class UserMedsRepo: ObservableObject {
         }
 
         if med.sourceType == .identified && finalMedId == nil {
-            errorMessage = localizedMedicationSaveError()
+            saveErrorMessage = localizedMedicationSaveError()
             #if DEBUG
             debugMedicationSaveFailure(med, ownerID: uidString, table: "user_medications", error: "identified medication missing catalog id")
             #endif
@@ -352,17 +397,30 @@ final class UserMedsRepo: ObservableObject {
         let isoFmt = ISO8601DateFormatter()
         isoFmt.formatOptions = [.withFullDate]
 
+        let payload = userMedicationPayload(for: med, ownerID: uidString, medicationID: finalMedId, formatter: isoFmt)
+
+        print("MED SAVE DEBUG")
+        print("currentAuthUserID:", supabase.authenticatedUserID as Any)
+        print("activePatientID:", supabase.activePatientID as Any)
+        print("resolvedOwnerID:", uidString)
+        print("mode:", supabase.activePatientID == nil ? "self" : "patient/caregiver")
+        print("payload user_id:", payload.user_id)
+        print("medication_name:", payload.medication_name as Any)
+        print("medication_id:", payload.medication_id as Any)
+        print("is_active:", payload.is_active as Any)
+        print("dosage_times:", payload.dosage_times as Any)
+        print("frequency_per_day:", payload.frequency_per_day as Any)
+
         do {
-            let row = userMedicationPayload(for: med, ownerID: uidString, medicationID: finalMedId, formatter: isoFmt)
-
-            try await supabase.client
+            let savedRows: [LocalMed.DBRow] = try await supabase.client
                 .from("user_medications")
-                .upsert(row)
+                .upsert(payload)
+                .select()
                 .execute()
+                .value
 
-            #if DEBUG
-            print("✅ Medication save succeeded table=user_medications status=success responseBody=nil")
-            #endif
+            print("MED SAVE SUCCESS rows:", savedRows.count)
+            print("MED SAVE SUCCESS first:", savedRows.first as Any)
 
             NotificationsManager.shared.updateReminders(for: med)
             await fetchMeds()
@@ -376,13 +434,15 @@ final class UserMedsRepo: ObservableObject {
                     debugMedicationSaveFailure(med, ownerID: uidString, table: "user_medications", error: "full payload failed; retrying legacy payload: \(error)")
                     #endif
                     let legacyRow = legacyUserMedicationPayload(for: med, ownerID: uidString, medicationID: finalMedId, formatter: isoFmt)
-                    try await supabase.client
+                    let savedRows: [LocalMed.DBRow] = try await supabase.client
                         .from("user_medications")
                         .upsert(legacyRow)
+                        .select()
                         .execute()
-                    #if DEBUG
-                    print("✅ Medication legacy save succeeded table=user_medications status=success responseBody=nil")
-                    #endif
+                        .value
+                    print("MED SAVE SUCCESS rows:", savedRows.count)
+                    print("MED SAVE SUCCESS first:", savedRows.first as Any)
+
                     NotificationsManager.shared.updateReminders(for: med)
                     await fetchMeds()
                     #if DEBUG
@@ -395,7 +455,7 @@ final class UserMedsRepo: ObservableObject {
                     #else
                     print("⚠️ add med failed:", error)
                     #endif
-                    errorMessage = localizedMedicationSaveError()
+                    saveErrorMessage = localizedMedicationSaveError()
                     return
                 }
             }
@@ -405,7 +465,7 @@ final class UserMedsRepo: ObservableObject {
             #else
             print("⚠️ add med failed:", error)
             #endif
-            errorMessage = localizedMedicationSaveError()
+            saveErrorMessage = localizedMedicationSaveError()
         }
     }
 
@@ -466,6 +526,11 @@ final class UserMedsRepo: ObservableObject {
                 refill_reminder_date: dateTimeString(med.refillReminderDate),
                 refill_reminder_mode: med.refillReminderMode,
                 refill_notes: normalizedNotes(med.refillNotes),
+                scan_source: med.scanSource ?? "manual",
+                scan_confidence: med.scanConfidence,
+                scan_confirmed_by_user: med.scanConfirmedByUser ?? false,
+                scan_extracted_fields: med.scanExtractedFields,
+                scan_candidate_snapshot: med.scanCandidateSnapshot,
                 custom_form_text: med.customFormText,
                 custom_unit_text: med.customUnitText,
                 source_metadata: med.sourceMetadata,
@@ -482,7 +547,13 @@ final class UserMedsRepo: ObservableObject {
         medicationID finalMedId: String?,
         formatter isoFmt: ISO8601DateFormatter
     ) -> LegacyUserMedicationUpsertPayload {
-        LegacyUserMedicationUpsertPayload(
+        #if DEBUG
+        print("Legacy medication payload visual fields")
+        print("  visual_shape:", med.visualShape as Any)
+        print("  visual_color:", med.visualColor as Any)
+        print("  visual_background_color:", med.visualBackgroundColor as Any)
+        #endif
+        return LegacyUserMedicationUpsertPayload(
             id: med.id,
             user_id: uidString,
             medication_id: finalMedId,
@@ -497,34 +568,58 @@ final class UserMedsRepo: ObservableObject {
             start_date: isoFmt.string(from: med.startDate),
             end_date: isoFmt.string(from: med.endDate),
             notes: normalizedNotes(med.notes),
-            is_active: true
+            is_active: true,
+            visual_shape: med.visualShape,
+            visual_color: med.visualColor,
+            visual_background_color: med.visualBackgroundColor,
+            medication_form: med.medicationForm
         )
     }
 
     func update(_ med: LocalMed) async { await add(med) }
 
     func delete(_ med: LocalMed) async {
+        let ownerContext: MedicationOwnerContext
+        do {
+            ownerContext = try supabase.resolveMedicationOwnerContext()
+        } catch {
+            print("MED DELETE ERROR resolving owner:", error)
+            saveErrorMessage = error.localizedDescription
+            return
+        }
+
         do {
             NotificationsManager.shared.cancelReminders(for: med.id)
-            if supabase.isPatientMode || supabase.activePatientID != nil {
+            
+            switch ownerContext {
+            case .patient:
                 try await supabase.deletePatientMedication(id: med.id)
                 await fetchMeds()
                 NotificationsManager.shared.cancelReminders(for: med.id)
-                return
+                
+            case .selfUser:
+                try await supabase.client
+                    .from("user_medications")
+                    .delete()
+                    .eq("id", value: med.id)
+                    .execute()
+                await fetchMeds()
             }
-
-            try await supabase.client
-                .from("user_medications")
-                .delete()
-                .eq("id", value: med.id)
-                .execute()
-            await fetchMeds()
         } catch {
-            errorMessage = error.localizedDescription
+            saveErrorMessage = error.localizedDescription
         }
     }
 
     func setArchived(_ med: LocalMed, archived: Bool) async {
+        let ownerContext: MedicationOwnerContext
+        do {
+            ownerContext = try supabase.resolveMedicationOwnerContext()
+        } catch {
+            print("MED ARCHIVE ERROR resolving owner:", error)
+            saveErrorMessage = error.localizedDescription
+            return
+        }
+
         do {
             if archived {
                 NotificationsManager.shared.cancelReminders(for: med.id)
@@ -532,7 +627,8 @@ final class UserMedsRepo: ObservableObject {
                 NotificationsManager.shared.updateReminders(for: med)
             }
 
-            if supabase.isPatientMode || supabase.activePatientID != nil {
+            switch ownerContext {
+            case .patient:
                 try await supabase.archivePatientMedication(id: med.id, archived: archived)
                 await fetchMeds()
                 if archived {
@@ -540,17 +636,17 @@ final class UserMedsRepo: ObservableObject {
                 } else {
                     NotificationsManager.shared.updateReminders(for: med)
                 }
-                return
+                
+            case .selfUser:
+                try await supabase.client
+                    .from("user_medications")
+                    .update(ArchivePayload(is_active: !archived))
+                    .eq("id", value: med.id)
+                    .execute()
+                await fetchMeds()
             }
-
-            try await supabase.client
-                .from("user_medications")
-                .update(ArchivePayload(is_active: !archived))
-                .eq("id", value: med.id)
-                .execute()
-            await fetchMeds()
         } catch {
-            errorMessage = error.localizedDescription
+            saveErrorMessage = error.localizedDescription
         }
     }
 
@@ -634,6 +730,7 @@ final class UserMedsRepo: ObservableObject {
             || text.contains("is_manual")
             || text.contains("food_rule_enum")
             || text.contains("invalid input value for enum")
+            || text.contains("scan_")
     }
 
     private func legacyFoodRuleStorage(_ rule: FoodRule) -> String {
@@ -754,6 +851,9 @@ final class UserMedsRepo: ObservableObject {
         lines.append("refill_threshold present: \(med.refillThresholdQuantity != nil)")
         lines.append("refill_reminder_mode: \(med.refillReminderMode ?? "nil")")
         lines.append("refill_reminder_date present: \(med.refillReminderDate != nil)")
+        lines.append("scanSource: \(med.scanSource ?? "nil")")
+        lines.append("scanConfidence: \(med.scanConfidence.map { String($0) } ?? "nil")")
+        lines.append("scanConfirmedByUser: \(med.scanConfirmedByUser.map { String($0) } ?? "nil")")
         lines.append("payloadKeys: \(debugPayloadKeys(for: endpoint))")
         lines.append("endpoint/table/EdgeFunction: \(endpoint)")
         if let status {
@@ -780,9 +880,9 @@ final class UserMedsRepo: ObservableObject {
 
     private func debugPayloadKeys(for endpoint: String) -> String {
         if endpoint == "patient-medications" {
-            return "action,device_token,target_patient_id,medication(id,medication_id,name,dosage,frequency_per_day,frequency_hours,dosage_times,is_prn,is_manual,is_manual_schedule,medication_name,source_type,medication_form,strength_value,strength_unit,dose_amount,dose_amount_unit,dose_quantity,dose_unit,dose_quantity_unit,strength_amount,parsed_strength_unit,concentration_amount,concentration_unit,route,application_area,dose_display,food_rule_source,dose_details_source,is_dose_auto_filled,dose_details_confirmed_by_user,schedule_mode,times_per_day,times_per_week,selected_weekdays,interval_days,reminders_enabled,caregiver_reminders_enabled,visual_shape,visual_color,visual_background_color,refill_reminder_enabled,refill_current_supply,refill_supply_unit,refill_threshold_quantity,refill_estimated_runout_date,refill_reminder_date,refill_reminder_mode,refill_notes,custom_form_text,custom_unit_text,source_metadata,start_date,end_date,notes,food_rule,rxcui,ingredients)"
+            return "action,device_token,target_patient_id,medication(id,medication_id,name,dosage,frequency_per_day,frequency_hours,dosage_times,is_prn,is_manual,is_manual_schedule,medication_name,source_type,medication_form,strength_value,strength_unit,dose_amount,dose_amount_unit,dose_quantity,dose_unit,dose_quantity_unit,strength_amount,parsed_strength_unit,concentration_amount,concentration_unit,route,application_area,dose_display,food_rule_source,dose_details_source,is_dose_auto_filled,dose_details_confirmed_by_user,schedule_mode,times_per_day,times_per_week,selected_weekdays,interval_days,reminders_enabled,caregiver_reminders_enabled,visual_shape,visual_color,visual_background_color,refill_reminder_enabled,refill_current_supply,refill_supply_unit,refill_threshold_quantity,refill_estimated_runout_date,refill_reminder_date,refill_reminder_mode,refill_notes,scan_source,scan_confidence,scan_confirmed_by_user,scan_extracted_fields,scan_candidate_snapshot,custom_form_text,custom_unit_text,source_metadata,start_date,end_date,notes,food_rule,rxcui,ingredients)"
         }
-        return "id,user_id,medication_id,dosage,frequency_per_day,frequency_hours,food_rule,dosage_times,is_prn,is_manual,is_manual_schedule,medication_name,source_type,medication_form,strength_value,strength_unit,dose_amount,dose_amount_unit,dose_quantity,dose_unit,dose_quantity_unit,strength_amount,parsed_strength_unit,concentration_amount,concentration_unit,route,application_area,dose_display,food_rule_source,dose_details_source,is_dose_auto_filled,dose_details_confirmed_by_user,schedule_mode,times_per_day,times_per_week,selected_weekdays,interval_days,reminders_enabled,caregiver_reminders_enabled,visual_shape,visual_color,visual_background_color,refill_reminder_enabled,refill_current_supply,refill_supply_unit,refill_threshold_quantity,refill_estimated_runout_date,refill_reminder_date,refill_reminder_mode,refill_notes,custom_form_text,custom_unit_text,source_metadata,start_date,end_date,notes,is_active"
+        return "id,user_id,medication_id,dosage,frequency_per_day,frequency_hours,food_rule,dosage_times,is_prn,is_manual,is_manual_schedule,medication_name,source_type,medication_form,strength_value,strength_unit,dose_amount,dose_amount_unit,dose_quantity,dose_unit,dose_quantity_unit,strength_amount,parsed_strength_unit,concentration_amount,concentration_unit,route,application_area,dose_display,food_rule_source,dose_details_source,is_dose_auto_filled,dose_details_confirmed_by_user,schedule_mode,times_per_day,times_per_week,selected_weekdays,interval_days,reminders_enabled,caregiver_reminders_enabled,visual_shape,visual_color,visual_background_color,refill_reminder_enabled,refill_current_supply,refill_supply_unit,refill_threshold_quantity,refill_estimated_runout_date,refill_reminder_date,refill_reminder_mode,refill_notes,scan_source,scan_confidence,scan_confirmed_by_user,scan_extracted_fields,scan_candidate_snapshot,custom_form_text,custom_unit_text,source_metadata,start_date,end_date,notes,is_active"
     }
 
     private func debugDate(_ date: Date) -> String {

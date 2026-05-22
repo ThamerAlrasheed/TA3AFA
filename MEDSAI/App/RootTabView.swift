@@ -7,31 +7,56 @@ struct RootTabView: View {
 
     // 0 Today, 1 Schedule, 2 Meds, 3 Search, 4 Settings
     @State private var selection: Int = 1
-
     var body: some View {
-        ZStack(alignment: .bottom) {
+        GeometryReader { proxy in
+            ZStack(alignment: .bottom) {
+                appBackground
+                    .ignoresSafeArea()
 
-            // Real TabView for navigation/state — stock bar is fully hidden
-            TabView(selection: $selection) {
-                TodayScheduleView().tag(0)
-                SchedulePageView().tag(1)
-                MedListView().tag(2)
-                SearchView().tag(3)
-                SettingsView().tag(4)
-            }
-            .toolbar(.hidden, for: .tabBar) // hide Apple's tab bar (iOS 16+)
-            .onAppear {
-                UITabBar.appearance().isHidden = true // extra safety
-            }
+                // Real TabView for navigation/state; the stock bar is fully hidden.
+                TabView(selection: $selection) {
+                    TodayScheduleView().tag(0)
+                    SchedulePageView().tag(1)
+                    MedListView().tag(2)
+                    SearchView().tag(3)
+                    SettingsView().tag(4)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea(edges: .bottom)
+                .toolbar(.hidden, for: .tabBar)
+                .onAppear {
+                    UITabBar.appearance().isHidden = true
+                }
 
-            // Custom glass bar (the only bar you see)
-            GlassTabBar(selection: $selection) { nextSelection in
-                selectTab(nextSelection)
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0)
+
+                    GlassTabBar(selection: $selection) { nextSelection in
+                        selectTab(nextSelection)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, tabBarDockPadding(proxy))
+                }
+                .ignoresSafeArea(.keyboard)
+                .ignoresSafeArea(edges: .bottom)
             }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 12)
-                .ignoresSafeArea(.keyboard) // don’t jump when keyboard appears
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
+    }
+
+    private func tabBarDockPadding(_ proxy: GeometryProxy) -> CGFloat {
+        4
+    }
+
+    private var appBackground: some View {
+        LinearGradient(
+            colors: [
+                Color.istsehMintBackground.opacity(0.55),
+                Color(.systemBackground)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
     }
 
     private func selectTab(_ nextSelection: Int) {

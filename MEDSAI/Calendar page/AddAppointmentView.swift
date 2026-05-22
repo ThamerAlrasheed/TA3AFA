@@ -22,6 +22,7 @@ struct AddAppointmentView: View {
     @State private var date: Date
     @State private var location: String
     @State private var notes: String
+    @State private var saveErrorMessage: String?
 
     init(repo: AppointmentsRepo, defaultDate: Date, existing: Appointment? = nil) {
         self.repo = repo
@@ -104,6 +105,14 @@ struct AddAppointmentView: View {
             }
         }
         .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
+        .alert("Unable to Save Appointment", isPresented: Binding(
+            get: { saveErrorMessage != nil },
+            set: { if !$0 { saveErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) { saveErrorMessage = nil }
+        } message: {
+            Text(saveErrorMessage ?? "Please try again.")
+        }
     }
 
     private func save() {
@@ -116,7 +125,11 @@ struct AddAppointmentView: View {
                 location: location.trimmed.nilIfEmpty,
                 notes: notes.trimmed.nilIfEmpty
             ) { err in
-                if err == nil { dismiss() }
+                if let err {
+                    saveErrorMessage = userFacingSaveError(from: err)
+                } else {
+                    dismiss()
+                }
             }
         } else {
             repo.add(
@@ -126,9 +139,24 @@ struct AddAppointmentView: View {
                 location: location.trimmed.nilIfEmpty,
                 notes: notes.trimmed.nilIfEmpty
             ) { err in
-                if err == nil { dismiss() }
+                if let err {
+                    saveErrorMessage = userFacingSaveError(from: err)
+                } else {
+                    dismiss()
+                }
             }
         }
+    }
+
+    private func userFacingSaveError(from error: Error) -> String {
+        let message = error.localizedDescription
+        if message.contains("42501") || message.localizedCaseInsensitiveContains("row-level security") {
+            if SupabaseManager.shared.activePatientID == nil && !SupabaseManager.shared.isPatientMode {
+                return "Unable to save appointment. Please try again."
+            }
+            return "You do not have permission to manage appointments for this profile."
+        }
+        return message.isEmpty ? "Please try again." : message
     }
 }
 

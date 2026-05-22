@@ -5,21 +5,13 @@ import UIKit
 // MARK: - UIImage Helpers
 extension UIImage {
     func resizedForMedicationAnalysis(maxDimension: CGFloat = 1400) -> UIImage {
-        let longestSide = max(size.width, size.height)
-        guard longestSide > maxDimension else { return self }
-
-        let scale = maxDimension / longestSide
-        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: newSize)
-        return renderer.image { _ in
-            self.draw(in: CGRect(origin: .zero, size: newSize))
-        }
+        downscaledForOCR(maxDimension: maxDimension)
     }
 
     func toBase64(maxDimension: CGFloat = 1400, maxSizeInBytes: Int = 850_000) -> String? {
         let image = resizedForMedicationAnalysis(maxDimension: maxDimension)
-        var compression: CGFloat = 0.9
-        var data = image.jpegData(compressionQuality: compression)
+        var compression: CGFloat = 0.78
+        var data = image.jpegDataForScanFallback(maxDimension: maxDimension, quality: compression)
         
         while (data?.count ?? 0) > maxSizeInBytes && compression > 0.1 {
             compression -= 0.1

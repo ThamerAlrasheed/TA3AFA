@@ -4,6 +4,9 @@ import Foundation
 struct SearchView: View {
     @EnvironmentObject var settings: AppSettings
     @StateObject private var historyRepo = SearchHistoryRepo()
+    @AppStorage("appearance.language") private var languageCode: String =
+        Locale.current.language.languageCode?.identifier ?? "en"
+    private var isArabic: Bool { languageCode == "ar" }
 
     @State private var query: String = ""
     @State private var isLoading = false
@@ -65,12 +68,12 @@ struct SearchView: View {
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 18)
-                    .padding(.bottom, 110)
                 }
+                .avoidsTabBar()
                 .scrollContentBackground(.hidden)
                 .scrollDismissesKeyboard(.interactively)
             }
-            .navigationTitle("Search")
+            .navigationTitle(isArabic ? "البحث" : "Search")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 if settings.role == .caregiver {
@@ -131,9 +134,7 @@ struct SearchView: View {
             }
 
             if isLoading {
-                ProgressView()
-                    .controlSize(.small)
-                    .tint(Color.istsehGreen)
+                ISTSEHLoadingView(message: "", style: .compact)
             }
         }
         .padding(.horizontal, 16)
@@ -439,16 +440,16 @@ private struct SearchStateCard: View {
 }
 
 private struct LoadingSearchCard: View {
+    @AppStorage("appearance.language") private var languageCode: String =
+        Locale.current.language.languageCode?.identifier ?? "en"
+
     var body: some View {
         SearchSurface {
-            HStack(spacing: 14) {
-                ProgressView()
-                    .tint(Color.istsehGreen)
-                Text("Searching medicine information...")
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                Spacer()
-            }
+            ISTSEHLoadingView(
+                message: languageCode == "ar" ? "جاري البحث" : "Searching",
+                style: .inline
+            )
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 }

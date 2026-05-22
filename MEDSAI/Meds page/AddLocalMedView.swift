@@ -8,6 +8,7 @@ struct AddLocalMedView: View {
 
     var initialPayload: DrugPayload? = nil
     var editingMed: LocalMed? = nil
+    var scanMetadata: MedicationScanSaveMetadata? = nil
     var onSave: (LocalMed) -> Void
 
     @State private var step: WizardStep = .confirm
@@ -74,15 +75,24 @@ struct AddLocalMedView: View {
     @State private var isManualDoseEditing: Bool
     @State private var showOptionalDoseFields: Bool
 
-    init(initialPayload: DrugPayload? = nil, editingMed: LocalMed? = nil, onSave: @escaping (LocalMed) -> Void) {
+    init(
+        initialPayload: DrugPayload? = nil,
+        editingMed: LocalMed? = nil,
+        scanMetadata: MedicationScanSaveMetadata? = nil,
+        onSave: @escaping (LocalMed) -> Void
+    ) {
         self.initialPayload = initialPayload
         self.editingMed = editingMed
+        self.scanMetadata = scanMetadata
         self.onSave = onSave
 
         let payload = initialPayload
         let med = editingMed
         let identified = med?.sourceType == .identified || payload?.id != nil
         let initialName = med?.name ?? payload?.title ?? ""
+        let initialForm = med?.medicationForm
+            ?? MedicationIconSuggestion.normalizedForm(from: payload?.dosageForms.first)
+            ?? ""
         let startDate = med?.startDate ?? Date()
         let endDate = med?.endDate ?? Calendar.current.date(byAdding: .day, value: 14, to: Date())!
 
@@ -91,7 +101,7 @@ struct AddLocalMedView: View {
         _sourceType = State(initialValue: identified ? .identified : .manual)
         _capturedIngredients = State(initialValue: med?.ingredients ?? payload?.ingredients ?? [])
         _capturedRxCUI = State(initialValue: med?.rxcui ?? payload?.rxcui)
-        _medicationForm = State(initialValue: med?.medicationForm ?? payload?.dosageForms.first ?? "")
+        _medicationForm = State(initialValue: initialForm)
         _customFormText = State(initialValue: med?.customFormText ?? "")
         _strengthValue = State(initialValue: med?.strengthValue)
         _strengthUnit = State(initialValue: med?.strengthUnit ?? "mg")
@@ -110,7 +120,7 @@ struct AddLocalMedView: View {
         _doseDetailsSource = State(initialValue: med?.doseDetailsSource ?? "manual")
         _isDoseAutoFilled = State(initialValue: med?.isDoseAutoFilled ?? false)
         _doseDetailsConfirmedByUser = State(initialValue: med?.doseDetailsConfirmedByUser ?? false)
-        _scheduleMode = State(initialValue: med?.scheduleMode ?? (med?.asNeeded == true ? .asNeeded : .daily))
+        _scheduleMode = State(initialValue: med?.scheduleMode ?? (med?.asNeeded == true ? .asNeeded : .asNeeded))
         _timesPerDay = State(initialValue: med?.timesPerDay ?? med?.frequencyPerDay ?? 1)
         _timesPerWeek = State(initialValue: med?.timesPerWeek ?? max(med?.selectedWeekdays.count ?? 1, 1))
         _selectedWeekdays = State(initialValue: Set(med?.selectedWeekdays ?? []))
@@ -120,9 +130,9 @@ struct AddLocalMedView: View {
         _start = State(initialValue: startDate)
         _end = State(initialValue: endDate)
         _hasEndDate = State(initialValue: med != nil)
-        _remindersEnabled = State(initialValue: med?.remindersEnabled ?? true)
+        _remindersEnabled = State(initialValue: med?.remindersEnabled ?? false)
         _caregiverRemindersEnabled = State(initialValue: med?.caregiverRemindersEnabled ?? false)
-        _visualShape = State(initialValue: med?.visualShape ?? "tablet")
+        _visualShape = State(initialValue: med?.visualShape ?? MedicationIconSuggestion.suggestedShapeID(for: initialForm) ?? "")
         _visualColor = State(initialValue: med?.visualColor ?? "green")
         _visualBackgroundColor = State(initialValue: med?.visualBackgroundColor ?? "softGreen")
         _refillReminderEnabled = State(initialValue: med?.refillReminderEnabled ?? false)
@@ -133,7 +143,7 @@ struct AddLocalMedView: View {
         _notes = State(initialValue: med?.notes ?? "")
         _infoChips = State(initialValue: PatientLabelSanitizer.cleanBullets(from: payload?.indications ?? [], max: 4))
         _dosageOptions = State(initialValue: MedicationStrengthFormatter.displayableStrengths(from: payload?.strengths ?? []))
-        _selectedDosageOption = State(initialValue: MedicationStrengthFormatter.displayableStrengths(from: payload?.strengths ?? []).first)
+        _selectedDosageOption = State(initialValue: nil)
         _parsedMinInterval = State(initialValue: med?.minIntervalHours ?? payload?.minIntervalHours)
         _isManualSchedule = State(initialValue: med?.isManualSchedule ?? false)
         _identificationState = State(initialValue: identified ? .identified : (initialName.isEmpty ? .idle : .manual))
@@ -179,13 +189,12 @@ struct AddLocalMedView: View {
             .overlay {
                 if isCheckingSafety {
                     ZStack {
-                        Color.black.opacity(0.22).ignoresSafeArea()
-                        VStack(spacing: 12) {
-                            ProgressView()
-                            Text(l("Checking safety...", "جاري فحص السلامة...")).font(.subheadline.weight(.semibold))
-                        }
-                        .padding(20)
-                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        Color.black.opacity(0.18).ignoresSafeArea()
+                        ISTSEHLoadingView(
+                            message: l("Checking safety", "جاري فحص السلامة"),
+                            style: .card
+                        )
+                        .padding(.horizontal, 28)
                     }
                 }
             }
@@ -232,6 +241,7 @@ struct AddLocalMedView: View {
                     .padding(.bottom)
                 } header: {
                     VisualPreviewDock(
+                        form: medicationForm.nilIfEmpty,
                         shapeID: visualShape,
                         visualColor: visualColor,
                         visualBackgroundColor: visualBackgroundColor,
@@ -398,7 +408,7 @@ struct AddLocalMedView: View {
                 if sourceType == .identified && !dosageOptions.isEmpty {
                     Text(l("Suggested strengths", "التركيزات المقترحة")).font(.headline)
                     ChipPicker(options: dosageOptions, selection: Binding(
-                        get: { selectedDosageOption ?? dosageOptions.first ?? "" },
+                        get: { selectedDosageOption ?? "" },
                         set: { value in
                             selectedDosageOption = value
                             isManualDoseEditing = false
@@ -906,22 +916,11 @@ struct AddLocalMedView: View {
         case .confirm:
             return name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? l("Medication name is required.", "اسم الدواء مطلوب.") : nil
         case .form:
-            if medicationForm.isEmpty { return l("Choose a form or Other.", "اختر الشكل أو أخرى.") }
             if medicationForm == "other" && customFormText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return l("Describe the other form.", "اكتب الشكل الآخر.")
             }
             return nil
         case .dose:
-            let visibility = currentFormRule.visibility
-            if visibility.quantityPerDoseVisible && (doseQuantity ?? 0) <= 0 {
-                return l("Dose per intake is required.", "الجرعة في كل مرة مطلوبة.")
-            }
-            if !visibility.quantityPerDoseVisible && visibility.strengthVisible && !visibility.doseFreeTextVisible && (strengthValue ?? doseAmount ?? 0) <= 0 {
-                return l("Dose size is required.", "حجم الجرعة مطلوب.")
-            }
-            if visibility.doseFreeTextVisible && doseDisplay.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                return l("Enter dose or application instructions.", "أدخل تعليمات الجرعة أو الاستخدام.")
-            }
             if strengthUnit == "other" && customUnitText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return l("Enter the custom unit.", "أدخل الوحدة الأخرى.")
             }
@@ -932,7 +931,7 @@ struct AddLocalMedView: View {
             }
             return nil
         case .scheduleTimes:
-            return scheduleMode.isPRN || !dosageTimes.isEmpty ? nil : l("Add at least one time.", "أضف وقتًا واحدًا على الأقل.")
+            return nil
         case .duration:
             return hasEndDate && start > end ? l("End date must be after start date.", "تاريخ الانتهاء يجب أن يكون بعد تاريخ البدء.") : nil
         default:
@@ -1054,12 +1053,14 @@ struct AddLocalMedView: View {
     private func save() {
         let timeFmt = DateFormatter()
         timeFmt.dateFormat = "HH:mm:ss"
-        let times = scheduleMode.isPRN ? [] : dosageTimes.map { timeFmt.string(from: $0) }
+        let times = scheduleMode.isPRN ? [] : DoseTextFormatter.deduplicatedTimeStrings(dosageTimes.map { timeFmt.string(from: $0) })
+        let savedScheduleMode: MedicationScheduleMode = (!scheduleMode.isPRN && times.isEmpty) ? .asNeeded : scheduleMode
+        let scanWasConfirmedInThisForm = scanMetadata?.scanSource == "manual_from_scan"
         let med = LocalMed(
             id: editingMed?.id ?? UUID().uuidString,
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             dosage: displayDose,
-            frequencyPerDay: scheduleMode.isPRN ? 1 : max(timesPerDay, times.count, 1),
+            frequencyPerDay: savedScheduleMode.isPRN ? 1 : max(timesPerDay, times.count, 1),
             startDate: start,
             endDate: effectiveEndDate,
             foodRule: foodRule,
@@ -1069,7 +1070,7 @@ struct AddLocalMedView: View {
             rxcui: capturedRxCUI,
             minIntervalHours: parsedMinInterval,
             isArchived: false,
-            asNeeded: scheduleMode.isPRN,
+            asNeeded: savedScheduleMode.isPRN,
             isManualSchedule: isManualSchedule,
             catalogId: sourceType == .identified ? catalogId : nil,
             sourceType: sourceType,
@@ -1079,14 +1080,14 @@ struct AddLocalMedView: View {
             strengthUnit: effectiveStrengthUnit,
             customUnitText: customUnitText.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             doseAmount: doseAmount,
-            doseAmountUnit: doseAmountUnit.nilIfEmpty,
+            doseAmountUnit: doseAmount == nil ? nil : doseAmountUnit.nilIfEmpty,
             doseQuantity: doseQuantity,
-            doseUnit: doseQuantityUnit.nilIfEmpty ?? doseUnit,
-            doseQuantityUnit: doseQuantityUnit.nilIfEmpty,
+            doseUnit: doseQuantity == nil ? nil : (doseQuantityUnit.nilIfEmpty ?? doseUnit),
+            doseQuantityUnit: doseQuantity == nil ? nil : doseQuantityUnit.nilIfEmpty,
             strengthAmount: effectiveStrengthValue,
             parsedStrengthUnit: effectiveStrengthUnit,
             concentrationAmount: concentrationAmount,
-            concentrationUnit: concentrationUnit.nilIfEmpty,
+            concentrationUnit: concentrationAmount == nil ? nil : concentrationUnit.nilIfEmpty,
             route: route.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             applicationArea: applicationArea.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             doseDisplay: displayDose.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
@@ -1094,12 +1095,12 @@ struct AddLocalMedView: View {
             doseDetailsSource: doseDetailsSource.nilIfEmpty,
             isDoseAutoFilled: isDoseAutoFilled,
             doseDetailsConfirmedByUser: doseDetailsConfirmedByUser,
-            scheduleMode: scheduleMode,
-            timesPerDay: scheduleMode == .daily ? timesPerDay : nil,
-            timesPerWeek: (scheduleMode == .weekly || scheduleMode == .specificDays) ? max(selectedWeekdays.count, 1) : nil,
-            selectedWeekdays: Array(selectedWeekdays).sorted(),
-            intervalDays: scheduleMode == .everyXDays ? intervalDays : nil,
-            remindersEnabled: remindersEnabled && !scheduleMode.isPRN,
+            scheduleMode: savedScheduleMode,
+            timesPerDay: savedScheduleMode == .daily ? timesPerDay : nil,
+            timesPerWeek: (savedScheduleMode == .weekly || savedScheduleMode == .specificDays) ? max(selectedWeekdays.count, 1) : nil,
+            selectedWeekdays: savedScheduleMode.isPRN ? [] : Array(selectedWeekdays).sorted(),
+            intervalDays: savedScheduleMode == .everyXDays ? intervalDays : nil,
+            remindersEnabled: remindersEnabled && !savedScheduleMode.isPRN && !times.isEmpty,
             caregiverRemindersEnabled: caregiverRemindersEnabled,
             visualShape: visualShape.nilIfEmpty,
             visualColor: visualColor.nilIfEmpty,
@@ -1112,7 +1113,12 @@ struct AddLocalMedView: View {
             refillReminderDate: effectiveRefillReminderDate,
             refillReminderMode: refillReminderEnabled ? "automatic" : nil,
             refillNotes: refillReminderEnabled ? refillNotes.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty : nil,
-            sourceMetadata: nil
+            sourceMetadata: nil,
+            scanSource: scanMetadata?.scanSource ?? editingMed?.scanSource ?? "manual",
+            scanConfidence: scanMetadata?.scanConfidence ?? editingMed?.scanConfidence,
+            scanConfirmedByUser: scanWasConfirmedInThisForm ? true : (scanMetadata?.scanConfirmedByUser ?? editingMed?.scanConfirmedByUser ?? false),
+            scanExtractedFields: scanMetadata?.extractedFields ?? editingMed?.scanExtractedFields,
+            scanCandidateSnapshot: scanMetadata?.candidateSnapshot ?? editingMed?.scanCandidateSnapshot
         )
         #if DEBUG
         print("""
@@ -1126,6 +1132,8 @@ struct AddLocalMedView: View {
         refill_threshold present: \(refillThresholdQuantity != nil)
         refill_reminder_mode: \(refillReminderEnabled ? "automatic" : "off")
         refill_reminder_date present: \(effectiveRefillReminderDate != nil)
+        scan_source: \(scanMetadata?.scanSource ?? editingMed?.scanSource ?? "manual")
+        scan_confirmed_by_user: \(scanMetadata?.scanConfirmedByUser ?? editingMed?.scanConfirmedByUser ?? false)
         """)
         #endif
         onSave(med)
@@ -1211,8 +1219,7 @@ struct AddLocalMedView: View {
 
     private func applyIdentifiedPayload(_ finalPayload: DrugPayload, source: String, confidence: Double, reason: String) {
         dosageOptions = MedicationStrengthFormatter.displayableStrengths(from: finalPayload.strengths)
-        selectedDosageOption = dosageOptions.first
-        if let first = dosageOptions.first { applySuggestedStrength(first) }
+        selectedDosageOption = nil
         foodRule = FoodRule.fromStorage(finalPayload.foodRule)
         foodRuleSource = foodRule == .none ? "" : "source"
         parsedMinInterval = finalPayload.minIntervalHours
@@ -1321,14 +1328,16 @@ struct AddLocalMedView: View {
         if strengthUnit == "other" {
             return customUnitText.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         }
-        return strengthValue == nil ? selectedDosageOption.flatMap { parseStrengthOption($0)?.unit } ?? strengthUnit : strengthUnit
+        if strengthValue != nil { return strengthUnit }
+        return selectedDosageOption.flatMap { parseStrengthOption($0)?.unit }
     }
 
     private var displayDose: String {
         if !doseDisplay.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return doseDisplay
         }
-        let quantity = doseQuantity ?? 0
+        guard let doseQuantity, doseQuantity > 0 else { return "" }
+        let quantity = doseQuantity
         let unit = doseQuantityUnit == "other" ? customUnitText : unitLabel(doseQuantityUnit, isArabic: isArabic)
         return "\(quantity.formatted()) \(unit)"
     }
@@ -1365,7 +1374,7 @@ struct AddLocalMedView: View {
             return injectionVisualShapes
         case "inhaler", "device":
             return deviceVisualShapes
-        case "cream", "ointment":
+        case "cream", "ointment", "gel", "topical", "lotion":
             return creamVisualShapes
         case "patch":
             return patchVisualShapes
@@ -1662,23 +1671,26 @@ private let medicationForms = [
     WizardOption(id: "cream", englishTitle: "Cream", arabicTitle: "كريم", systemImage: "cross.case.fill"),
     WizardOption(id: "ointment", englishTitle: "Ointment", arabicTitle: "مرهم", systemImage: "cross.case.fill"),
     WizardOption(id: "patch", englishTitle: "Patch", arabicTitle: "لصقة", systemImage: "square.fill"),
-    WizardOption(id: "spray", englishTitle: "Spray", arabicTitle: "رذاذ", systemImage: "spray.fill"),
+    WizardOption(id: "spray", englishTitle: "Spray", arabicTitle: "رذاذ", systemImage: "humidity.fill"),
     WizardOption(id: "suppository", englishTitle: "Suppository", arabicTitle: "تحميلة", systemImage: "diamond.fill"),
     WizardOption(id: "device", englishTitle: "Device", arabicTitle: "جهاز", systemImage: "medical.thermometer.fill"),
     WizardOption(id: "other", englishTitle: "Other", arabicTitle: "أخرى", systemImage: "ellipsis.circle")
 ]
 
 private let tabletVisualShapes = [
-    WizardOption(id: "tablet", englishTitle: "Round pill", arabicTitle: "قرص دائري", systemImage: "circle.fill"),
+    WizardOption(id: "tablet_rounded", englishTitle: "Rounded", arabicTitle: "مستدير", systemImage: "pills.fill"),
+    WizardOption(id: "tablet_circle", englishTitle: "Circle", arabicTitle: "دائري", systemImage: "pills.fill"),
+    WizardOption(id: "tablet_soft", englishTitle: "Soft square", arabicTitle: "مربع ناعم", systemImage: "pills.fill"),
     WizardOption(id: "oval", englishTitle: "Oval", arabicTitle: "بيضاوي", systemImage: "capsule.fill"),
-    WizardOption(id: "oblong", englishTitle: "Oblong", arabicTitle: "مستطيل", systemImage: "capsule.fill"),
     WizardOption(id: "diamond", englishTitle: "Diamond", arabicTitle: "معيّن", systemImage: "diamond.fill"),
     WizardOption(id: "other", englishTitle: "Other", arabicTitle: "أخرى", systemImage: "ellipsis.circle")
 ]
 
 private let capsuleVisualShapes = [
-    WizardOption(id: "capsule", englishTitle: "Capsule", arabicTitle: "كبسولة", systemImage: "capsule.portrait.fill"),
-    WizardOption(id: "capsuleHorizontal", englishTitle: "Side capsule", arabicTitle: "كبسولة أفقية", systemImage: "capsule.fill"),
+    WizardOption(id: "capsule_rounded", englishTitle: "Rounded", arabicTitle: "مستدير", systemImage: "capsule.fill"),
+    WizardOption(id: "capsule_circle", englishTitle: "Circle", arabicTitle: "دائري", systemImage: "capsule.fill"),
+    WizardOption(id: "capsule_horizontal", englishTitle: "Wide", arabicTitle: "عريض", systemImage: "capsule.fill"),
+    WizardOption(id: "capsule_soft", englishTitle: "Soft square", arabicTitle: "مربع ناعم", systemImage: "capsule.fill"),
     WizardOption(id: "other", englishTitle: "Other", arabicTitle: "أخرى", systemImage: "ellipsis.circle")
 ]
 
@@ -1709,18 +1721,20 @@ private let deviceVisualShapes = [
 ]
 
 private let creamVisualShapes = [
-    WizardOption(id: "tube", englishTitle: "Tube", arabicTitle: "أنبوب", systemImage: "cross.case.fill"),
+    WizardOption(id: "cream_tube", englishTitle: "Tube", arabicTitle: "أنبوب", systemImage: "cross.case.fill"),
+    WizardOption(id: "ointment", englishTitle: "Ointment", arabicTitle: "مرهم", systemImage: "cross.case.fill"),
+    WizardOption(id: "gel", englishTitle: "Gel", arabicTitle: "جل", systemImage: "cross.case.fill"),
     WizardOption(id: "jar", englishTitle: "Jar", arabicTitle: "علبة", systemImage: "shippingbox.fill"),
     WizardOption(id: "other", englishTitle: "Other", arabicTitle: "أخرى", systemImage: "ellipsis.circle")
 ]
 
 private let patchVisualShapes = [
-    WizardOption(id: "patch", englishTitle: "Patch", arabicTitle: "لصقة", systemImage: "square.fill"),
+    WizardOption(id: "patch", englishTitle: "Patch", arabicTitle: "لصقة", systemImage: "bandage.fill"),
     WizardOption(id: "other", englishTitle: "Other", arabicTitle: "أخرى", systemImage: "ellipsis.circle")
 ]
 
 private let sprayVisualShapes = [
-    WizardOption(id: "spray", englishTitle: "Spray", arabicTitle: "رذاذ", systemImage: "spray.fill"),
+    WizardOption(id: "spray", englishTitle: "Spray", arabicTitle: "رذاذ", systemImage: "humidity.fill"),
     WizardOption(id: "inhaler", englishTitle: "Inhaler", arabicTitle: "بخاخ", systemImage: "wind"),
     WizardOption(id: "other", englishTitle: "Other", arabicTitle: "أخرى", systemImage: "ellipsis.circle")
 ]
@@ -1760,28 +1774,38 @@ private let concentrationUnits = ["mg/mL", "mcg/mL", "units/mL", "IU/mL", "mg/5 
 private let routeOptions = ["", "subcutaneous", "intramuscular", "intravenous", "unknown"]
 private let applicationAreaOptions = ["", "skin", "eye", "ear", "nose", "oral", "other"]
 private let visualColorSwatches = [
-    MedicationColorSwatch(id: "green", englishTitle: "Green", arabicTitle: "أخضر", color: Color.istsehGreen),
-    MedicationColorSwatch(id: "mint", englishTitle: "Mint", arabicTitle: "نعناعي", color: Color(red: 0.34, green: 0.78, blue: 0.64)),
-    MedicationColorSwatch(id: "sage", englishTitle: "Sage", arabicTitle: "أخضر رمادي", color: Color(red: 0.48, green: 0.62, blue: 0.51)),
-    MedicationColorSwatch(id: "teal", englishTitle: "Teal", arabicTitle: "أخضر مزرق", color: Color(red: 0.16, green: 0.62, blue: 0.58)),
-    MedicationColorSwatch(id: "aqua", englishTitle: "Aqua", arabicTitle: "مائي", color: Color(red: 0.28, green: 0.72, blue: 0.76)),
-    MedicationColorSwatch(id: "white", englishTitle: "White", arabicTitle: "أبيض", color: .white),
-    MedicationColorSwatch(id: "amber", englishTitle: "Amber", arabicTitle: "عنبر", color: Color(red: 0.86, green: 0.62, blue: 0.22)),
-    MedicationColorSwatch(id: "rose", englishTitle: "Rose", arabicTitle: "وردي هادئ", color: Color(red: 0.78, green: 0.36, blue: 0.42)),
-    MedicationColorSwatch(id: "slate", englishTitle: "Slate", arabicTitle: "رصاصي", color: Color(red: 0.36, green: 0.43, blue: 0.48)),
-    MedicationColorSwatch(id: "yellow", englishTitle: "Soft yellow", arabicTitle: "أصفر هادئ", color: Color(red: 0.88, green: 0.76, blue: 0.30)),
-    MedicationColorSwatch(id: "red", englishTitle: "Soft red", arabicTitle: "أحمر هادئ", color: Color(red: 0.76, green: 0.28, blue: 0.32))
+    MedicationColorSwatch(id: "green", englishTitle: "Green", arabicTitle: "أخضر", color: Color(red: 0.18, green: 0.72, blue: 0.44)),
+    MedicationColorSwatch(id: "sage", englishTitle: "Sage", arabicTitle: "أخضر رمادي", color: Color(red: 0.42, green: 0.58, blue: 0.46)),
+    MedicationColorSwatch(id: "mint", englishTitle: "Mint", arabicTitle: "نعناعي", color: Color(red: 0.22, green: 0.70, blue: 0.56)),
+    MedicationColorSwatch(id: "emerald", englishTitle: "Emerald", arabicTitle: "زمردي", color: Color(red: 0.15, green: 0.60, blue: 0.42)),
+    MedicationColorSwatch(id: "teal", englishTitle: "Teal", arabicTitle: "أخضر مزرق", color: Color(red: 0.10, green: 0.56, blue: 0.58)),
+    MedicationColorSwatch(id: "aqua", englishTitle: "Aqua", arabicTitle: "مائي", color: Color(red: 0.12, green: 0.54, blue: 0.68)),
+    MedicationColorSwatch(id: "coral", englishTitle: "Coral", arabicTitle: "مرجاني", color: Color(red: 0.82, green: 0.38, blue: 0.38)),
+    MedicationColorSwatch(id: "rose", englishTitle: "Rose", arabicTitle: "وردي", color: Color(red: 0.78, green: 0.32, blue: 0.46)),
+    MedicationColorSwatch(id: "peach", englishTitle: "Peach", arabicTitle: "خوخي", color: Color(red: 0.82, green: 0.52, blue: 0.32)),
+    MedicationColorSwatch(id: "amber", englishTitle: "Amber", arabicTitle: "عنبر", color: Color(red: 0.78, green: 0.58, blue: 0.16)),
+    MedicationColorSwatch(id: "lavender", englishTitle: "Lavender", arabicTitle: "لافندر", color: Color(red: 0.52, green: 0.42, blue: 0.78)),
+    MedicationColorSwatch(id: "purple", englishTitle: "Purple", arabicTitle: "بنفسجي", color: Color(red: 0.58, green: 0.36, blue: 0.76)),
+    MedicationColorSwatch(id: "slate", englishTitle: "Slate", arabicTitle: "رصاصي", color: Color(red: 0.38, green: 0.44, blue: 0.52)),
+    MedicationColorSwatch(id: "sand", englishTitle: "Sand", arabicTitle: "رملي", color: Color(red: 0.62, green: 0.48, blue: 0.32)),
+    MedicationColorSwatch(id: "neutral", englishTitle: "Neutral", arabicTitle: "محايد", color: Color(red: 0.34, green: 0.38, blue: 0.42))
 ]
 private let visualBackgroundSwatches = [
-    MedicationColorSwatch(id: "softGreen", englishTitle: "Soft green", arabicTitle: "أخضر هادئ", color: Color.istsehGreen.opacity(0.18)),
-    MedicationColorSwatch(id: "softMint", englishTitle: "Soft mint", arabicTitle: "نعناعي هادئ", color: Color(red: 0.34, green: 0.78, blue: 0.64).opacity(0.20)),
-    MedicationColorSwatch(id: "softSage", englishTitle: "Soft sage", arabicTitle: "أخضر رمادي هادئ", color: Color(red: 0.48, green: 0.62, blue: 0.51).opacity(0.22)),
-    MedicationColorSwatch(id: "softTeal", englishTitle: "Soft teal", arabicTitle: "أخضر مزرق هادئ", color: Color(red: 0.16, green: 0.62, blue: 0.58).opacity(0.18)),
+    MedicationColorSwatch(id: "softGreen", englishTitle: "Soft green", arabicTitle: "أخضر هادئ", color: Color(red: 0.91, green: 0.97, blue: 0.93)),
+    MedicationColorSwatch(id: "softMint", englishTitle: "Soft mint", arabicTitle: "نعناعي هادئ", color: Color(red: 0.89, green: 0.97, blue: 0.94)),
+    MedicationColorSwatch(id: "softTeal", englishTitle: "Soft teal", arabicTitle: "أخضر مزرق هادئ", color: Color(red: 0.88, green: 0.96, blue: 0.96)),
+    MedicationColorSwatch(id: "softAqua", englishTitle: "Soft aqua", arabicTitle: "مائي هادئ", color: Color(red: 0.89, green: 0.95, blue: 0.97)),
+    MedicationColorSwatch(id: "softCoral", englishTitle: "Soft coral", arabicTitle: "مرجاني هادئ", color: Color(red: 0.98, green: 0.92, blue: 0.92)),
+    MedicationColorSwatch(id: "softRose", englishTitle: "Soft rose", arabicTitle: "وردي هادئ", color: Color(red: 0.98, green: 0.91, blue: 0.94)),
+    MedicationColorSwatch(id: "softPeach", englishTitle: "Soft peach", arabicTitle: "خوخي هادئ", color: Color(red: 1.00, green: 0.94, blue: 0.90)),
+    MedicationColorSwatch(id: "softAmber", englishTitle: "Soft amber", arabicTitle: "عنبر هادئ", color: Color(red: 1.00, green: 0.96, blue: 0.86)),
+    MedicationColorSwatch(id: "softLavender", englishTitle: "Soft lavender", arabicTitle: "لافندر هادئ", color: Color(red: 0.94, green: 0.93, blue: 1.00)),
+    MedicationColorSwatch(id: "softSand", englishTitle: "Soft sand", arabicTitle: "رملي هادئ", color: Color(red: 0.97, green: 0.94, blue: 0.90)),
     MedicationColorSwatch(id: "mist", englishTitle: "Mist", arabicTitle: "ضبابي", color: Color(red: 0.88, green: 0.94, blue: 0.92)),
     MedicationColorSwatch(id: "neutral", englishTitle: "Neutral", arabicTitle: "محايد", color: Color(.secondarySystemBackground)),
-    MedicationColorSwatch(id: "warm", englishTitle: "Warm", arabicTitle: "دافئ", color: Color(red: 0.86, green: 0.62, blue: 0.22).opacity(0.18)),
-    MedicationColorSwatch(id: "blush", englishTitle: "Blush", arabicTitle: "وردي خفيف", color: Color(red: 0.78, green: 0.36, blue: 0.42).opacity(0.14)),
-    MedicationColorSwatch(id: "dark", englishTitle: "Dark", arabicTitle: "داكن", color: Color(red: 0.05, green: 0.11, blue: 0.18))
+    MedicationColorSwatch(id: "warm", englishTitle: "Warm", arabicTitle: "دافئ", color: Color(red: 0.98, green: 0.95, blue: 0.88)),
+    MedicationColorSwatch(id: "blush", englishTitle: "Blush", arabicTitle: "وردي خفيف", color: Color(red: 0.98, green: 0.92, blue: 0.93)),
+    MedicationColorSwatch(id: "dark", englishTitle: "Dark", arabicTitle: "داكن", color: Color(red: 0.10, green: 0.14, blue: 0.20))
 ]
 private let weekdayOptions = [(1, "Sun", "الأحد"), (2, "Mon", "الاثنين"), (3, "Tue", "الثلاثاء"), (4, "Wed", "الأربعاء"), (5, "Thu", "الخميس"), (6, "Fri", "الجمعة"), (7, "Sat", "السبت")].map { (id: $0.0, en: $0.1, ar: $0.2) }
 
@@ -1944,6 +1968,7 @@ private struct ColorSwatchSection: View {
 }
 
 private struct VisualPreviewDock: View {
+    let form: String?
     let shapeID: String
     let visualColor: String
     let visualBackgroundColor: String
@@ -1953,7 +1978,7 @@ private struct VisualPreviewDock: View {
     var body: some View {
         VStack(spacing: 6) {
             MedicationVisualView(
-                form: nil,
+                form: form,
                 shapeID: shapeID,
                 medicationColorID: visualColor,
                 backgroundColorID: visualBackgroundColor,

@@ -12,6 +12,9 @@ build/
 .agents/
 working/
 functions/
+!supabase/functions/
+!supabase/functions/scan-text-resolver/
+!supabase/functions/scan-text-resolver/index.ts
 patch_pbxproj.py
 read_defaults.sh
 seed_defaults.sh

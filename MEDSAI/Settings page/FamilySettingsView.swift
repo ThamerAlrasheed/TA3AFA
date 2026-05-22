@@ -65,7 +65,12 @@ struct FamilySettingsView: View {
             }
             .listRowSeparator(.hidden)
         }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(Color.istsehPageBackground.ignoresSafeArea())
         .navigationTitle(SettingsL10n.text("Family Members", "أفراد العائلة"))
+        .navigationBarTitleDisplayMode(.inline)
+        .tint(Color.istsehGreen)
         .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
         .navigationDestination(item: $selectedPatient) { patient in
             ManagedPatientSettingsView(patient: patient) {
@@ -441,7 +446,12 @@ struct ManagedPatientSettingsView: View {
                 }
             }
         }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(Color.istsehPageBackground.ignoresSafeArea())
         .navigationTitle(SettingsL10n.text("\(patient.firstName)'s Settings", "إعدادات \(patient.firstName)"))
+        .navigationBarTitleDisplayMode(.inline)
+        .tint(Color.istsehGreen)
         .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
         .disabled(isSaving)
         .alert(SettingsL10n.text("Remove \(patient.firstName)?", "إزالة \(patient.firstName)؟"), isPresented: $showRemoveConfirmation) {

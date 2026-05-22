@@ -283,13 +283,14 @@ enum Scheduler {
 
         // 0. Use explicit dosageTimes if provided (User override)
         if let explicit = med.dosageTimes, !explicit.isEmpty {
-            return explicit.compactMap { t -> Date? in
+            let dates = explicit.compactMap { t -> Date? in
                 let parts = t.split(separator: ":")
                 guard parts.count >= 2 else { return nil }
                 let h = Int(parts[0]) ?? 0
                 let m = Int(parts[1]) ?? 0
                 return cal.date(bySettingHour: h, minute: m, second: 0, of: startOfDay)
             }
+            return DoseTextFormatter.deduplicatedDoseDates(dates, calendar: cal)
         }
 
         func time(_ comps: DateComponents) -> Date {
@@ -321,7 +322,7 @@ enum Scheduler {
                 to: bed.addingTimeInterval(TimeInterval(-bedtimeBufferMinutes * 60)),
                 minSpacingHours: interval
             )
-            return raw.map(clampInsideAwake)
+            return DoseTextFormatter.deduplicatedDoseDates(raw.map(clampInsideAwake), calendar: cal)
         }
 
         switch med.foodRule {
@@ -333,9 +334,9 @@ enum Scheduler {
             case 3:  anchors = [breakfast, lunch, dinner]
             default: anchors = [breakfast, lunch, dinner, bed]
             }
-            return Array(anchors.prefix(med.frequencyPerDay))
+            return DoseTextFormatter.deduplicatedDoseDates(Array(anchors.prefix(med.frequencyPerDay))
                 .map { shift($0, minutes: mealOffsetMinutes) }
-                .map(clampInsideAwake)
+                .map(clampInsideAwake), calendar: cal)
 
         case .beforeFood:
             let anchors: [Date]
@@ -345,9 +346,9 @@ enum Scheduler {
             case 3:  anchors = [breakfast, lunch, dinner]
             default: anchors = [breakfast, lunch, dinner, bed]
             }
-            return Array(anchors.prefix(med.frequencyPerDay))
+            return DoseTextFormatter.deduplicatedDoseDates(Array(anchors.prefix(med.frequencyPerDay))
                 .map { shift($0, minutes: -mealOffsetMinutes) }
-                .map(clampInsideAwake)
+                .map(clampInsideAwake), calendar: cal)
 
         case .withFood:
             let anchors: [Date]
@@ -357,8 +358,10 @@ enum Scheduler {
             case 3:  anchors = [breakfast, lunch, dinner]
             default: anchors = [breakfast, lunch, dinner, bed]
             }
-            return Array(anchors.prefix(med.frequencyPerDay))
-                .map(clampInsideAwake)
+            return DoseTextFormatter.deduplicatedDoseDates(
+                Array(anchors.prefix(med.frequencyPerDay)).map(clampInsideAwake),
+                calendar: cal
+            )
 
         case .avoidWithFood, .notSure, .none:
             var anchors: [Date]
@@ -374,7 +377,7 @@ enum Scheduler {
                     minSpacingHours: nil
                 )
             }
-            return anchors.map(clampInsideAwake)
+            return DoseTextFormatter.deduplicatedDoseDates(anchors.map(clampInsideAwake), calendar: cal)
         }
     }
 
@@ -588,10 +591,18 @@ enum MedSummarizer {
     }
 }
 
+// MARK: - App Layout Metrics
+
+enum AppLayoutMetrics {
+    static let tabBarHeight: CGFloat = 86
+    static let tabBarBottomPadding: CGFloat = 8
+    static let tabBarContentClearance: CGFloat = 118
+}
+
 // MARK: - Keep scrolling content above the tab bar
 
 private struct TabBarAvoider: ViewModifier {
-    private let pad: CGFloat = 110
+    private let pad: CGFloat = AppLayoutMetrics.tabBarContentClearance
 
     func body(content: Content) -> some View {
         content

@@ -103,6 +103,11 @@ struct LocalMed: Identifiable, Hashable, Equatable {
     var refillReminderMode: String?
     var refillNotes: String?
     var sourceMetadata: String?
+    var scanSource: String?
+    var scanConfidence: Double?
+    var scanConfirmedByUser: Bool?
+    var scanExtractedFields: MedicationExtractedFields?
+    var scanCandidateSnapshot: [MedicationScanCandidate]?
 
     init(
         id: String = UUID().uuidString,
@@ -161,7 +166,12 @@ struct LocalMed: Identifiable, Hashable, Equatable {
         refillReminderDate: Date? = nil,
         refillReminderMode: String? = nil,
         refillNotes: String? = nil,
-        sourceMetadata: String? = nil
+        sourceMetadata: String? = nil,
+        scanSource: String? = nil,
+        scanConfidence: Double? = nil,
+        scanConfirmedByUser: Bool? = nil,
+        scanExtractedFields: MedicationExtractedFields? = nil,
+        scanCandidateSnapshot: [MedicationScanCandidate]? = nil
     ) {
         self.id = id
         self.name = name
@@ -220,6 +230,11 @@ struct LocalMed: Identifiable, Hashable, Equatable {
         self.refillReminderMode = refillReminderMode
         self.refillNotes = refillNotes
         self.sourceMetadata = sourceMetadata
+        self.scanSource = scanSource
+        self.scanConfidence = scanConfidence
+        self.scanConfirmedByUser = scanConfirmedByUser
+        self.scanExtractedFields = scanExtractedFields
+        self.scanCandidateSnapshot = scanCandidateSnapshot
     }
 
     /// Decode from Supabase row
@@ -276,6 +291,11 @@ struct LocalMed: Identifiable, Hashable, Equatable {
         let refill_reminder_date: String?
         let refill_reminder_mode: String?
         let refill_notes: String?
+        let scan_source: String?
+        let scan_confidence: Double?
+        let scan_confirmed_by_user: Bool?
+        let scan_extracted_fields: MedicationExtractedFields?
+        let scan_candidate_snapshot: [MedicationScanCandidate]?
         let custom_form_text: String?
         let custom_unit_text: String?
         let dosage_times: [String]?
@@ -343,6 +363,11 @@ struct LocalMed: Identifiable, Hashable, Equatable {
         self.refillReminderDate = Self.parseOptionalDate(row.refill_reminder_date)
         self.refillReminderMode = row.refill_reminder_mode
         self.refillNotes = row.refill_notes
+        self.scanSource = row.scan_source
+        self.scanConfidence = row.scan_confidence
+        self.scanConfirmedByUser = row.scan_confirmed_by_user
+        self.scanExtractedFields = row.scan_extracted_fields
+        self.scanCandidateSnapshot = row.scan_candidate_snapshot
         self.sourceMetadata = nil
 
         let df = ISO8601DateFormatter()
@@ -383,6 +408,35 @@ struct LocalMed: Identifiable, Hashable, Equatable {
             return false
         }
     }
+
+    func shouldShowOnDate(_ date: Date, calendar: Calendar = .current) -> Bool {
+        if isArchived { return false }
+        let day = calendar.startOfDay(for: date)
+        let start = calendar.startOfDay(for: startDate)
+        let end = calendar.startOfDay(for: endDate)
+        guard day >= start && day <= end else { return false }
+
+        if scheduleMode.isPRN || asNeeded {
+            return true
+        }
+
+        switch scheduleMode {
+        case .daily:
+            return true
+        case .weekly, .specificDays:
+            if selectedWeekdays.isEmpty {
+                return true
+            }
+            let weekday = calendar.component(.weekday, from: day)
+            return selectedWeekdays.contains(weekday)
+        case .everyXDays:
+            let interval = max(intervalDays ?? 1, 1)
+            let days = calendar.dateComponents([.day], from: start, to: day).day ?? 0
+            return days >= 0 && days % interval == 0
+        case .asNeeded, .emergencyOnly:
+            return true
+        }
+    }
 }
 
 extension LocalMed {
@@ -392,23 +446,9 @@ extension LocalMed {
                 ? (isArabic ? "للطوارئ فقط" : "Emergency only")
                 : (isArabic ? "عند الحاجة" : "As needed")
         }
-        let times = dosageTimes.map { String($0.prefix(5)) }.joined(separator: ", ")
-        if !dosageTimes.isEmpty {
-            switch scheduleMode {
-            case .daily:
-                return isArabic ? "\(frequencyPerDay) مرات يوميًا · \(times)" : "\(frequencyPerDay)x/day · \(times)"
-            case .weekly, .specificDays:
-                let days = weekdaySummary(isArabic: isArabic)
-                return days.isEmpty ? (isArabic ? "أيام محددة · \(times)" : "Selected days · \(times)") : "\(days) · \(times)"
-            case .everyXDays:
-                return isArabic ? "كل \(intervalDays ?? 1) أيام · \(times)" : "Every \(intervalDays ?? 1) days · \(times)"
-            case .asNeeded, .emergencyOnly:
-                return isArabic ? "عند الحاجة" : "As needed"
-            }
-        }
         switch scheduleMode {
         case .daily:
-            return isArabic ? "\(frequencyPerDay) مرات يوميًا" : "\(frequencyPerDay)x/day"
+            return DoseTextFormatter.formatFrequency(for: self, isArabic: isArabic)
         case .weekly:
             let days = weekdaySummary(isArabic: isArabic)
             return days.isEmpty ? (isArabic ? "أسبوعيًا" : "Weekly") : days
@@ -437,13 +477,6 @@ extension LocalMed {
     }
 
     func foodRuleLabel(isArabic: Bool = false) -> String {
-        switch foodRule {
-        case .none: return isArabic ? "بدون تعليمات طعام" : "No food instructions"
-        case .beforeFood: return isArabic ? "قبل الأكل" : "Before food"
-        case .withFood: return isArabic ? "مع الأكل" : "With food"
-        case .afterFood: return isArabic ? "بعد الأكل" : "After food"
-        case .avoidWithFood: return isArabic ? "تجنب تناوله مع الطعام" : "Avoid with food"
-        case .notSure: return isArabic ? "غير متأكد" : "Not sure"
-        }
+        DoseTextFormatter.formatFoodInstruction(foodRule, isArabic: isArabic) ?? ""
     }
 }

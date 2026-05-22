@@ -16,10 +16,11 @@ struct MedListView: View {
 
     @State private var showingAdd = false
     @State private var analyzedPayload: DrugPayload? = nil
+    @State private var analyzedScanMetadata: MedicationScanSaveMetadata? = nil
     @State private var isPresentingPhotoPicker = false
     @State private var isPresentingCamera = false
     @State private var selectedItem: PhotosPickerItem?
-    @State private var selectedImage: UIImage?
+    @State private var scanImageBundle: MedicationScanImageBundle?
     @State private var showUploadReview = false
     @State private var cameraAlert: CameraAccessAlert?
 
@@ -41,16 +42,16 @@ struct MedListView: View {
                     ContentUnavailableView("Sign in required",
                         systemImage: "person.crop.circle.badge.exclamationmark",
                         description: Text("Please log in to view and manage your medications."))
-                } else if repo.isLoading {
+                } else if repo.isLoading && !repo.hasLoadedOnce && repo.meds.isEmpty {
                     BrandedLoadingView(message: LoadingMessage.medications.text, style: .fullScreen)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let err = repo.errorMessage {
-                    ContentUnavailableView("Couldn’t load medications",
+                } else if let err = repo.errorMessage, repo.meds.isEmpty {
+                    ContentUnavailableView("Couldn't load medications",
                         systemImage: "exclamationmark.triangle",
                         description: Text(err))
                 } else {
                     List {
-                        if repo.meds.isEmpty {
+                        if repo.meds.isEmpty && repo.hasLoadedOnce {
                             Text("No medications yet. Tap + to add.")
                                 .foregroundStyle(.secondary)
                                 .listRowBackground(Color.istsehCard)
@@ -80,7 +81,9 @@ struct MedListView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color.istsehPageBackground.ignoresSafeArea())
-            .navigationTitle("Meds")
+            .navigationTitle(isArabic ? "الأدوية" : "Meds")
+            .navigationBarTitleDisplayMode(.inline)
+            .avoidsTabBar()
             .toolbar {
                 if settings.role == .caregiver {
                     ToolbarItem(placement: .topBarLeading) {
@@ -121,14 +124,18 @@ struct MedListView: View {
             }
 
             // Upload photo review
-            .sheet(isPresented: $showUploadReview) {
-                if let img = selectedImage {
-                    UploadPhotoView(image: img) { payload in
+            .sheet(isPresented: $showUploadReview, onDismiss: {
+                scanImageBundle = nil
+            }) {
+                if let bundle = scanImageBundle {
+                    UploadPhotoView(imageBundle: bundle) { payload, metadata in
                         analyzedPayload = payload
-                        selectedImage = nil
+                        analyzedScanMetadata = metadata
+                        scanImageBundle = nil
                         showingAdd = true
                     } onCancel: {
-                        selectedImage = nil
+                        scanImageBundle = nil
+                        analyzedScanMetadata = nil
                     }
                     .presentationDetents([.medium, .large])
                 }
@@ -139,15 +146,15 @@ struct MedListView: View {
                           photoLibrary: .shared())
             .fullScreenCover(isPresented: $isPresentingCamera) {
                 CameraCaptureView { image in
-                    selectedImage = image
+                    scanImageBundle = MedicationScanImageBundle(original: image)
                     showUploadReview = true
                 } onError: { message in
                     if message != "cancelled" {
                         cameraAlert = CameraAccessAlert(
-                            title: "Camera unavailable",
-                            message: friendlyCameraMessage(message),
-                            canOpenSettings: message.lowercased().contains("permission"),
-                            canChoosePhoto: true
+                             title: "Camera unavailable",
+                             message: friendlyCameraMessage(message),
+                             canOpenSettings: message.lowercased().contains("permission"),
+                             canChoosePhoto: true
                         )
                     }
                 }
@@ -169,10 +176,11 @@ struct MedListView: View {
             .onChange(of: selectedItem) { _, newItem in
                 guard let newItem else { return }
                 Task {
-                    if let data = try? await newItem.loadTransferable(type: Data.self),
-                       let image = UIImage(data: data) {
-                        selectedImage = image
-                        showUploadReview = true
+                    if let data = try? await newItem.loadTransferable(type: Data.self) {
+                        if let rawImage = UIImage(data: data) {
+                            scanImageBundle = MedicationScanImageBundle(original: rawImage)
+                            showUploadReview = true
+                        }
                     }
                     selectedItem = nil
                 }
@@ -197,8 +205,11 @@ struct MedListView: View {
             }
 
             // Add sheet
-            .sheet(isPresented: $showingAdd, onDismiss: { analyzedPayload = nil }) {
-                AddLocalMedView(initialPayload: analyzedPayload) { newMed in
+            .sheet(isPresented: $showingAdd, onDismiss: {
+                analyzedPayload = nil
+                analyzedScanMetadata = nil
+            }) {
+                AddLocalMedView(initialPayload: analyzedPayload, scanMetadata: analyzedScanMetadata) { newMed in
                     Task { await repo.add(newMed) }
                 }
                 .presentationDetents([.medium, .large])
@@ -224,6 +235,14 @@ struct MedListView: View {
                 if newPhase == .active {
                     Task { await repo.fetchMeds() }
                 }
+            }
+            .alert("Save Error", isPresented: Binding(
+                get: { repo.saveErrorMessage != nil },
+                set: { if !$0 { repo.saveErrorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) { repo.saveErrorMessage = nil }
+            } message: {
+                Text(repo.saveErrorMessage ?? "An error occurred while saving.")
             }
         }
         .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
@@ -322,26 +341,47 @@ private struct MedRowView: View {
     var body: some View {
         let sortedWarnings = SafetyWarningPresentation.sorted(warnings)
 
-        HStack(spacing: 12) {
+        HStack(spacing: 14) {
             MedicationVisualView(
                 form: med.medicationForm,
                 shapeID: med.visualShape,
                 medicationColorID: med.visualColor,
                 backgroundColorID: med.visualBackgroundColor,
-                size: 46
+                size: 56
             )
 
             VStack(alignment: isRTL ? .trailing : .leading, spacing: 5) {
-                Text(med.name).font(.headline)
+                Text(med.name)
+                    .font(.system(.title3, design: .rounded).weight(.bold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
                 let isArabic = UserDefaults.standard.string(forKey: "appearance.language") == "ar"
+
+                // Line 1: clean dose amount (hidden if suspicious/messy)
+                if let doseText = DoseTextFormatter.formatDoseAmount(for: med) {
+                    Text(doseText)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                // Line 2: schedule frequency or food rule
+                let schedule = med.scheduleSummary(isArabic: isArabic)
                 let foodVisible = MedicationFormRules.shouldShowFoodTiming(formID: med.medicationForm, foodRule: med.foodRule, sourceBacked: med.foodRuleSource == "source")
-                let subtitle = [
-                    med.doseDisplay ?? med.dosage,
-                    med.scheduleSummary(isArabic: isArabic),
-                    foodVisible && !(med.scheduleMode.isPRN || med.asNeeded) ? med.foodRuleLabel(isArabic: isArabic) : nil
-                ].compactMap { $0 }.joined(separator: " • ")
-                Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
-                    .multilineTextAlignment(isRTL ? .trailing : .leading)
+                let foodLabel = foodVisible && !(med.scheduleMode.isPRN || med.asNeeded) ? med.foodRuleLabel(isArabic: isArabic) : ""
+
+                if !schedule.isEmpty {
+                    Text(schedule)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                } else if !foodLabel.isEmpty {
+                    Text(foodLabel)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
 
                 if let primaryWarning = sortedWarnings.first {
                     SafetyWarningBadge(
@@ -380,20 +420,20 @@ private struct MedRowView: View {
 
 // MARK: - Upload review (restored)
 struct UploadPhotoView: View {
-    let image: UIImage
-    var onDone: ((DrugPayload) -> Void)? = nil
+    let imageBundle: MedicationScanImageBundle
+    var onDone: ((DrugPayload, MedicationScanSaveMetadata?) -> Void)? = nil
     var onCancel: (() -> Void)? = nil
     @Environment(\.dismiss) private var dismiss
     
     @State private var isAnalyzing = false
     @State private var errorMessage: String? = nil
-    @State private var scanResult: ScanResult? = nil
+    @State private var scanDecision: MedicationScanDecision? = nil
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 16) {
                 ZStack {
-                    Image(uiImage: image)
+                    Image(uiImage: imageBundle.previewImage)
                         .resizable()
                         .scaledToFit()
                         .frame(maxHeight: 320)
@@ -402,8 +442,8 @@ struct UploadPhotoView: View {
                         .blur(radius: isAnalyzing ? 3 : 0)
                     
                     if isAnalyzing {
-                        BrandedLoadingView(
-                            message: LoadingMessage.custom("Analyzing medication…", "جاري تحليل الدواء…").text,
+                        ISTSEHLoadingView(
+                            message: LoadingMessage.custom("Analyzing medication", "جاري تحليل الدواء").text,
                             style: .card
                         )
                         .padding(24)
@@ -437,16 +477,17 @@ struct UploadPhotoView: View {
                     .disabled(isAnalyzing)
                 }
             }
-            .sheet(item: $scanResult) { result in
+            .sheet(item: $scanDecision) { decision in
                 MedScanConfirmationView(
-                    image: image,
-                    scanResult: result,
-                    onConfirmed: { finalPayload in
-                        onDone?(finalPayload)
+                    previewImage: imageBundle.previewImage,
+                    fallbackImageDataProvider: { imageBundle.fallbackImageData() },
+                    decision: decision,
+                    onConfirmed: { finalPayload, metadata in
+                        onDone?(finalPayload, metadata)
                         dismiss()
                     },
                     onCancel: {
-                        scanResult = nil
+                        scanDecision = nil
                     }
                 )
             }
@@ -454,28 +495,27 @@ struct UploadPhotoView: View {
     }
     
     private func analyze() {
-        guard let base64 = image.toBase64() else {
-            errorMessage = "We couldn't prepare this photo. Please try again or choose another image."
-            return
-        }
-        
         isAnalyzing = true
         errorMessage = nil
         
         Task {
             do {
-                let result = try await DrugInfo.analyzeImage(base64: base64)
+                let result = try await MedicationScanPipeline().process(
+                    imageBundle: imageBundle,
+                    allowGPTResolver: true,
+                    allowImageFallback: false
+                )
                 await MainActor.run {
                     isAnalyzing = false
-                    scanResult = result
+                    scanDecision = result
                 }
             } catch {
                 #if DEBUG
-                print("Medication photo analysis failed: \(error)")
+                print("Medication local scan failed: \(error)")
                 #endif
                 await MainActor.run {
                     isAnalyzing = false
-                    errorMessage = "We couldn't analyze this photo. Please try again or choose a clearer image."
+                    errorMessage = "We could not read enough text from this image. Try better lighting or use AI image recognition."
                 }
             }
         }

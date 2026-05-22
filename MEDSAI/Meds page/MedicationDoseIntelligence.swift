@@ -329,23 +329,196 @@ enum MedicationDoseParser {
 
 extension LocalMed {
     func doseActionText(isArabic: Bool = false) -> String {
-        let form = MedicationFormRules.normalizedForm(medicationForm)
-        let display = (doseDisplay?.isEmpty == false ? doseDisplay! : dosage)
-        switch form {
-        case "cream", "ointment", "gel":
-            return isArabic ? "ضع \(name)" : "Apply \(name)"
-        case "injection":
-            return isArabic ? "استخدم حقنة \(name)" : "Inject \(name)"
-        case "inhaler":
-            return isArabic ? "استخدم \(name)، \(display)" : "Use \(name), \(display)"
-        case "drops":
-            return isArabic ? "استخدم \(display) من \(name)" : "Use \(display) of \(name)"
-        case "patch":
-            return isArabic ? "استبدل أو ضع لصقة \(name)" : "Replace/apply \(name) patch"
-        case "spray":
-            return isArabic ? "استخدم \(display) من \(name)" : "Use \(display) of \(name)"
-        default:
-            return isArabic ? "خذ \(display) من \(name)" : "Take \(display) of \(name)"
+        DoseTextFormatter.medicationTitle(name)
+    }
+}
+
+enum DoseTextFormatter {
+    static func medicationTitle(_ name: String?) -> String {
+        let trimmed = (name ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "Medication" : trimmed
+    }
+
+    static func formatDoseAmount(for med: LocalMed) -> String? {
+        if let text = formatAmount(med.doseQuantity, unit: med.doseQuantityUnit ?? med.doseUnit, explicit: med.doseDetailsConfirmedByUser) {
+            return text
         }
+        if let text = formatAmount(med.doseAmount, unit: med.doseAmountUnit, explicit: med.doseDetailsConfirmedByUser) {
+            return text
+        }
+        if let text = parseDisplayDose(med.doseDisplay, explicit: med.doseDetailsConfirmedByUser) {
+            return text
+        }
+        if let text = parseDisplayDose(med.dosage, explicit: med.doseDetailsConfirmedByUser) {
+            return text
+        }
+        return formatAmount(med.strengthValue ?? med.strengthAmount, unit: med.strengthUnit ?? med.parsedStrengthUnit, explicit: med.doseDetailsConfirmedByUser)
+    }
+
+    static func formatFrequency(for med: LocalMed, isArabic: Bool = false) -> String {
+        if med.asNeeded || med.scheduleMode.isPRN {
+            return isArabic ? "عند الحاجة" : "As needed"
+        }
+        let count = max(med.timesPerDay ?? med.frequencyPerDay, 0)
+        guard count > 0 else {
+            return isArabic ? "غير مجدول" : "Unscheduled"
+        }
+        if isArabic {
+            return count == 1 ? "مرة يوميًا" : "\(count) مرات يوميًا"
+        }
+        switch count {
+        case 1: return "Once daily"
+        case 2: return "Twice daily"
+        default: return "\(count) times daily"
+        }
+    }
+
+    static func formatFoodInstruction(_ rule: FoodRule, isArabic: Bool = false) -> String? {
+        switch rule {
+        case .beforeFood: return isArabic ? "قبل الأكل" : "Before food"
+        case .afterFood: return isArabic ? "بعد الأكل" : "After food"
+        case .withFood: return isArabic ? "مع الأكل" : "With food"
+        case .avoidWithFood: return isArabic ? "تجنب تناوله مع الطعام" : "Avoid with food"
+        case .notSure: return isArabic ? "تعليمات الطعام غير مؤكدة" : "Food timing not sure"
+        case .none: return nil
+        }
+    }
+
+    static func shouldShowFoodInstruction(for med: LocalMed) -> Bool {
+        med.foodRule != .none
+    }
+
+    static func deduplicatedTimeStrings(_ times: [String]) -> [String] {
+        Array(Set(times.compactMap(normalizedHHmm))).sorted().map { "\($0):00" }
+    }
+
+    static func deduplicatedDoseDates(_ dates: [Date], calendar: Calendar = .current) -> [Date] {
+        var seen = Set<String>()
+        return dates
+            .sorted()
+            .filter { date in
+                let key = normalizedHHmm(date, calendar: calendar)
+                guard !seen.contains(key) else { return false }
+                seen.insert(key)
+                return true
+            }
+    }
+
+    static func deduplicatedDosePairs(_ pairs: [(Date, LocalMed)], calendar: Calendar = .current) -> [(Date, LocalMed)] {
+        var seen = Set<String>()
+        return pairs
+            .sorted { $0.0 < $1.0 }
+            .filter { date, med in
+                let key = "\(med.id)|\(calendar.startOfDay(for: date).timeIntervalSince1970)|\(normalizedHHmm(date, calendar: calendar))"
+                guard !seen.contains(key) else { return false }
+                seen.insert(key)
+                return true
+            }
+    }
+
+    private static func parseDisplayDose(_ value: String?, explicit: Bool) -> String? {
+        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let lower = trimmed.lowercased()
+        guard !lower.contains("/") && !lower.contains("mg/ml") && !lower.contains("mg / ml") else { return nil }
+
+        let pattern = #"([0-9]+(?:[.,][0-9]+)?)\s*([A-Za-z/%]+)"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]),
+              let match = regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
+              match.numberOfRanges >= 3,
+              let amountRange = Range(match.range(at: 1), in: trimmed),
+              let unitRange = Range(match.range(at: 2), in: trimmed) else {
+            return nil
+        }
+        let amountText = String(trimmed[amountRange]).replacingOccurrences(of: ",", with: ".")
+        return formatAmount(Double(amountText), unit: String(trimmed[unitRange]), explicit: explicit)
+    }
+
+    private static func formatAmount(_ amount: Double?, unit rawUnit: String?, explicit: Bool) -> String? {
+        guard let amount, amount > 0 else { return nil }
+        let unit = normalizedUnit(rawUnit)
+        guard let unit else { return nil }
+        guard isValid(amount: amount, unit: unit, explicit: explicit) else {
+            #if DEBUG
+            print("DoseTextFormatter hiding suspicious dose amount: \(amount) \(unit)")
+            #endif
+            return nil
+        }
+        return "\(formatNumber(amount)) \(displayUnit(unit, amount: amount))"
+    }
+
+    private static func isValid(amount: Double, unit: String, explicit: Bool) -> Bool {
+        switch unit {
+        case "tablet", "capsule", "pill", "drop", "spray", "puff":
+            return (0.25...10).contains(amount)
+        case "mg":
+            return (0.01...5000).contains(amount)
+        case "ml":
+            return (0.01...100).contains(amount)
+        case "mcg", "g", "iu", "%", "unit", "dose":
+            return explicit ? amount <= 5000 : amount <= 1000
+        default:
+            return explicit && amount <= 1000
+        }
+    }
+
+    private static func normalizedUnit(_ value: String?) -> String? {
+        let unit = (value ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        guard !unit.isEmpty else { return nil }
+        if unit.contains("/") { return nil }
+        switch unit {
+        case "tablet", "tablets", "tab", "tabs": return "tablet"
+        case "capsule", "capsules", "cap", "caps": return "capsule"
+        case "pill", "pills": return "pill"
+        case "drop", "drops": return "drop"
+        case "spray", "sprays": return "spray"
+        case "puff", "puffs": return "puff"
+        case "ml", "milliliter", "milliliters": return "ml"
+        case "mg", "milligram", "milligrams": return "mg"
+        case "mcg", "microgram", "micrograms": return "mcg"
+        case "g", "gram", "grams": return "g"
+        case "iu": return "iu"
+        case "unit", "units": return "unit"
+        case "dose", "doses": return "dose"
+        case "%": return "%"
+        default: return unit
+        }
+    }
+
+    private static func displayUnit(_ unit: String, amount: Double) -> String {
+        switch unit {
+        case "tablet", "capsule", "pill", "drop", "spray", "puff", "unit", "dose":
+            return amount == 1 ? unit : "\(unit)s"
+        case "ml": return "mL"
+        case "iu": return "IU"
+        default: return unit
+        }
+    }
+
+    private static func formatNumber(_ amount: Double) -> String {
+        let formatter = NumberFormatter()
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = amount < 1 ? 2 : 1
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = false
+        return formatter.string(from: NSNumber(value: amount)) ?? "\(amount)"
+    }
+
+    private static func normalizedHHmm(_ value: String) -> String? {
+        let parts = value.split(separator: ":")
+        guard parts.count >= 2,
+              let hour = Int(parts[0]),
+              let minute = Int(parts[1]),
+              (0...23).contains(hour),
+              (0...59).contains(minute) else { return nil }
+        return String(format: "%02d:%02d", hour, minute)
+    }
+
+    private static func normalizedHHmm(_ date: Date, calendar: Calendar) -> String {
+        let hour = calendar.component(.hour, from: date)
+        let minute = calendar.component(.minute, from: date)
+        return String(format: "%02d:%02d", hour, minute)
     }
 }

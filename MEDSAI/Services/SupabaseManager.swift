@@ -7,6 +7,11 @@ enum ActiveCareContext: Equatable {
     case linkedPatient(patientId: UUID, deviceSessionId: String)
 }
 
+enum MedicationOwnerContext: Equatable {
+    case selfUser(UUID)
+    case patient(UUID)
+}
+
 /// Central manager for all PostgreSQL interactions via Supabase.
 /// Replace the placeholder URL and key with your actual Supabase credentials.
 final class SupabaseManager {
@@ -136,6 +141,11 @@ final class SupabaseManager {
         let refillReminderDate: String?
         let refillReminderMode: String?
         let refillNotes: String?
+        let scanSource: String?
+        let scanConfidence: Double?
+        let scanConfirmedByUser: Bool?
+        let scanExtractedFields: MedicationExtractedFields?
+        let scanCandidateSnapshot: [MedicationScanCandidate]?
         let customFormText: String?
         let customUnitText: String?
         let sourceMetadata: String?
@@ -196,6 +206,11 @@ final class SupabaseManager {
             case refillReminderDate = "refill_reminder_date"
             case refillReminderMode = "refill_reminder_mode"
             case refillNotes = "refill_notes"
+            case scanSource = "scan_source"
+            case scanConfidence = "scan_confidence"
+            case scanConfirmedByUser = "scan_confirmed_by_user"
+            case scanExtractedFields = "scan_extracted_fields"
+            case scanCandidateSnapshot = "scan_candidate_snapshot"
             case customFormText = "custom_form_text"
             case customUnitText = "custom_unit_text"
             case sourceMetadata = "source_metadata"
@@ -225,15 +240,21 @@ final class SupabaseManager {
         let id: String?
         let title: String
         let doctorName: String
+        let appointmentType: String
         let appointmentTime: String
+        let location: String?
         let notes: String?
+        let isCompleted: Bool?
 
         enum CodingKeys: String, CodingKey {
             case id
             case title
             case doctorName = "doctor_name"
+            case appointmentType = "appointment_type"
             case appointmentTime = "appointment_time"
+            case location
             case notes
+            case isCompleted = "is_completed"
         }
     }
 
@@ -241,14 +262,17 @@ final class SupabaseManager {
         let id: String
         let title: String
         let doctor_name: String?
+        let appointment_type: String?
         let appointment_time: String
+        let location: String?
         let notes: String?
+        let is_completed: Bool?
 
         func toAppointment() -> Appointment {
-            let type = AppointmentType.fromString(doctor_name)
+            let type = AppointmentType.fromString(appointment_type ?? doctor_name)
             let date = ISO8601DateFormatter().date(from: appointment_time) ?? Date()
             let normalizedNotes = (notes?.isEmpty == true) ? nil : notes
-            return Appointment(id: id, title: title, type: type, date: date, location: nil, notes: normalizedNotes)
+            return Appointment(id: id, title: title, type: type, date: date, location: location, notes: normalizedNotes)
         }
     }
 
@@ -326,6 +350,27 @@ final class SupabaseManager {
                           userInfo: [NSLocalizedDescriptionKey: "User is not signed in."])
         }
         return id
+    }
+
+    func resolveMedicationOwnerContext() throws -> MedicationOwnerContext {
+        if let activePatientID = activePatientID {
+            return .patient(activePatientID)
+        }
+        if isPatientMode, let patientID = patientUserID {
+            return .patient(patientID)
+        }
+        if let authID = authenticatedUserID {
+            return .selfUser(authID)
+        }
+        throw NSError(domain: "SupabaseManager", code: 401,
+                      userInfo: [NSLocalizedDescriptionKey: "No active owner context found."])
+    }
+
+    func ownerIDString(from context: MedicationOwnerContext) -> String {
+        switch context {
+        case .selfUser(let id), .patient(let id):
+            return id.uuidString
+        }
     }
 
     func resolveActiveCareContext() -> ActiveCareContext? {
@@ -620,6 +665,11 @@ final class SupabaseManager {
             refillReminderDate: dateTimeString(med.refillReminderDate),
             refillReminderMode: med.refillReminderMode,
             refillNotes: normalizedNotes(med.refillNotes),
+            scanSource: med.scanSource ?? "manual",
+            scanConfidence: med.scanConfidence,
+            scanConfirmedByUser: med.scanConfirmedByUser ?? false,
+            scanExtractedFields: med.scanExtractedFields,
+            scanCandidateSnapshot: med.scanCandidateSnapshot,
             customFormText: med.customFormText,
             customUnitText: med.customUnitText,
             sourceMetadata: med.sourceMetadata,
@@ -664,15 +714,18 @@ final class SupabaseManager {
         return (response.appointments ?? []).map { $0.toAppointment() }
     }
 
-    func savePatientAppointment(id: String?, title: String, type: AppointmentType, date: Date, notes: String?) async throws {
+    func savePatientAppointment(id: String?, title: String, type: AppointmentType, date: Date, location: String?, notes: String?) async throws {
         let requestContext = try patientFunctionRequestContext()
 
         let payload = PatientAppointmentPayload(
             id: id,
             title: title,
             doctorName: type.rawValue,
+            appointmentType: type.rawValue,
             appointmentTime: ISO8601DateFormatter().string(from: date),
-            notes: normalizedNotes(notes)
+            location: normalizedNotes(location),
+            notes: normalizedNotes(notes),
+            isCompleted: id == nil ? false : nil
         )
 
         let _: PatientMedicationFunctionResponse = try await invokePatientMedicationFunction(
@@ -868,7 +921,10 @@ final class SupabaseManager {
         lines.append("refill_threshold present: \(med.refillThresholdQuantity != nil)")
         lines.append("refill_reminder_mode: \(med.refillReminderMode ?? "nil")")
         lines.append("refill_reminder_date present: \(med.refillReminderDate != nil)")
-        lines.append("payloadKeys: action,device_token,target_patient_id,medication(id,medication_id,name,dosage,frequency_per_day,frequency_hours,dosage_times,is_prn,is_manual,is_manual_schedule,medication_name,source_type,medication_form,strength_value,strength_unit,dose_amount,dose_amount_unit,dose_quantity,dose_unit,dose_quantity_unit,strength_amount,parsed_strength_unit,concentration_amount,concentration_unit,route,application_area,dose_display,food_rule_source,dose_details_source,is_dose_auto_filled,dose_details_confirmed_by_user,schedule_mode,times_per_day,times_per_week,selected_weekdays,interval_days,reminders_enabled,caregiver_reminders_enabled,visual_shape,visual_color,visual_background_color,refill_reminder_enabled,refill_current_supply,refill_supply_unit,refill_threshold_quantity,refill_estimated_runout_date,refill_reminder_date,refill_reminder_mode,refill_notes,custom_form_text,custom_unit_text,source_metadata,start_date,end_date,notes,food_rule,rxcui,ingredients)")
+        lines.append("scanSource: \(med.scanSource ?? "nil")")
+        lines.append("scanConfidence: \(med.scanConfidence.map { String($0) } ?? "nil")")
+        lines.append("scanConfirmedByUser: \(med.scanConfirmedByUser.map { String($0) } ?? "nil")")
+        lines.append("payloadKeys: action,device_token,target_patient_id,medication(id,medication_id,name,dosage,frequency_per_day,frequency_hours,dosage_times,is_prn,is_manual,is_manual_schedule,medication_name,source_type,medication_form,strength_value,strength_unit,dose_amount,dose_amount_unit,dose_quantity,dose_unit,dose_quantity_unit,strength_amount,parsed_strength_unit,concentration_amount,concentration_unit,route,application_area,dose_display,food_rule_source,dose_details_source,is_dose_auto_filled,dose_details_confirmed_by_user,schedule_mode,times_per_day,times_per_week,selected_weekdays,interval_days,reminders_enabled,caregiver_reminders_enabled,visual_shape,visual_color,visual_background_color,refill_reminder_enabled,refill_current_supply,refill_supply_unit,refill_threshold_quantity,refill_estimated_runout_date,refill_reminder_date,refill_reminder_mode,refill_notes,scan_source,scan_confidence,scan_confirmed_by_user,scan_extracted_fields,scan_candidate_snapshot,custom_form_text,custom_unit_text,source_metadata,start_date,end_date,notes,food_rule,rxcui,ingredients)")
         lines.append("endpoint/table/EdgeFunction: patient-medications")
         print(lines.joined(separator: "\n"))
     }

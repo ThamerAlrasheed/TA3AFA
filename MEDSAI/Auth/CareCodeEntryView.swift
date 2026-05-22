@@ -113,6 +113,8 @@ struct CareCodeEntryView: View {
                     deviceToken: result.deviceToken
                 )
 
+                NotificationCenter.default.post(name: NSNotification.Name("SupabaseContextChanged"), object: nil)
+
                 await MainActor.run {
                     isLoading = false
                     settings.role = .patient

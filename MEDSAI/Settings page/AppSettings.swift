@@ -194,11 +194,15 @@ final class AppSettings: ObservableObject {
         onboardingCompleted = true
         await loadCurrentUserProfile()
         await loadRoutineFromSupabase()
+        print("LOGIN DEBUG currentAuthUserID:", supabase.authenticatedUserID as Any)
+        print("LOGIN DEBUG activePatientID after login:", activePatientID as Any)
+        NotificationCenter.default.post(name: NSNotification.Name("SupabaseContextChanged"), object: nil)
     }
 
     @MainActor
     func signOutCompletely() async {
         let previousContext = supabase.resolveActiveCareContext()
+        print("LOGOUT DEBUG clearing activePatientID:", activePatientID as Any)
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
         try? await supabase.client.auth.signOut()
         PatientSessionStore.shared.clearAllSessionValuesBestEffort()
@@ -209,6 +213,7 @@ final class AppSettings: ObservableObject {
         try? PatientSessionStore.shared.clearUserRole()
         didChooseEntry = false
         onboardingCompleted = false
+        NotificationCenter.default.post(name: NSNotification.Name("SupabaseContextChanged"), object: nil)
         debugSessionLog("signOutCompletely", previousContext: previousContext)
     }
 
