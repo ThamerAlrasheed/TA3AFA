@@ -611,6 +611,7 @@ final class SupabaseManager {
 
     func savePatientMedication(_ med: LocalMed) async throws {
         let requestContext = try patientFunctionRequestContext()
+        let normalizedTimesPerDay = med.dosageTimes.isEmpty ? med.timesPerDay : med.dosageTimes.count
 
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withFullDate]
@@ -648,7 +649,7 @@ final class SupabaseManager {
             isDoseAutoFilled: med.isDoseAutoFilled,
             doseDetailsConfirmedByUser: med.doseDetailsConfirmedByUser,
             scheduleMode: med.scheduleMode.storageValue,
-            timesPerDay: med.timesPerDay,
+            timesPerDay: normalizedTimesPerDay,
             timesPerWeek: med.timesPerWeek,
             selectedWeekdays: med.selectedWeekdays.isEmpty ? nil : med.selectedWeekdays,
             intervalDays: med.intervalDays,

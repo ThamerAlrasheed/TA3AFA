@@ -332,13 +332,30 @@ final class UserMedsRepo: ObservableObject {
         let uidString = supabase.ownerIDString(from: ownerContext).lowercased()
 
         #if DEBUG
+        print("FAMILY MED SAVE DEBUG")
+        print("selectedContext:", debugSelectedContext())
+        print("auth.uid:", supabase.authenticatedUserID as Any)
+        print("activePatientID:", supabase.activePatientID as Any)
+        print("activePatientName:", AppSettings.shared.activePatientName as Any)
+        print("resolvedOwnerID:", uidString)
+        print("isSelfMode:", supabase.activePatientID == nil && !supabase.isPatientMode)
+        print("isFamilyMemberMode:", supabase.activePatientID != nil)
+        print("save route:", supabase.activePatientID == nil && !supabase.isPatientMode ? "direct user_medications" : "patient-medications edge function or caregiver-safe route")
+        print("payload medication_name:", med.name)
+        print("payload user_id:", uidString)
         debugMedicationSaveStarted(med, ownerID: uidString, endpoint: supabase.isPatientMode || supabase.activePatientID != nil ? "patient-medications" : "user_medications")
         #endif
 
         if case .patient = ownerContext {
+            guard canAddMeds else {
+                saveErrorMessage = medicationPermissionErrorMessage()
+                return
+            }
+
             do {
                 try await supabase.savePatientMedication(med)
                 await fetchMeds()
+                NotificationCenter.default.post(name: .medicationsDidChange, object: nil)
                 #if DEBUG
                 debugMedicationRefreshStatus(errorMessage)
                 #endif
@@ -346,11 +363,18 @@ final class UserMedsRepo: ObservableObject {
                 print("MED SAVE SUCCESS id:", med.id)
             } catch {
                 #if DEBUG
+                print("FAMILY MED SAVE ERROR:", error)
+                if let postgrestError = error as? PostgrestError {
+                    print("PostgREST code:", postgrestError.code as Any)
+                    print("PostgREST message:", postgrestError.message)
+                    print("PostgREST detail:", postgrestError.detail as Any)
+                    print("PostgREST hint:", postgrestError.hint as Any)
+                }
                 debugMedicationSaveFailure(med, ownerID: uidString, table: "patient-medications", error: "\(error)")
                 #else
                 print("⚠️ patient add med failed:", error)
                 #endif
-                saveErrorMessage = localizedMedicationSaveError()
+                saveErrorMessage = medicationSaveMessage(for: error, isPatientContext: true)
             }
             return
         }
@@ -424,6 +448,7 @@ final class UserMedsRepo: ObservableObject {
 
             NotificationsManager.shared.updateReminders(for: med)
             await fetchMeds()
+            NotificationCenter.default.post(name: .medicationsDidChange, object: nil)
             #if DEBUG
             debugMedicationRefreshStatus(errorMessage)
             #endif
@@ -445,6 +470,7 @@ final class UserMedsRepo: ObservableObject {
 
                     NotificationsManager.shared.updateReminders(for: med)
                     await fetchMeds()
+                    NotificationCenter.default.post(name: .medicationsDidChange, object: nil)
                     #if DEBUG
                     debugMedicationRefreshStatus(errorMessage)
                     #endif
@@ -475,7 +501,9 @@ final class UserMedsRepo: ObservableObject {
         medicationID finalMedId: String?,
         formatter isoFmt: ISO8601DateFormatter
     ) -> UserMedicationUpsertPayload {
-        UserMedicationUpsertPayload(
+        let normalizedTimesPerDay = med.dosageTimes.isEmpty ? med.timesPerDay : med.dosageTimes.count
+
+        return UserMedicationUpsertPayload(
                 id: med.id,
                 user_id: uidString,
                 medication_id: finalMedId,
@@ -509,7 +537,7 @@ final class UserMedsRepo: ObservableObject {
                 is_dose_auto_filled: med.isDoseAutoFilled,
                 dose_details_confirmed_by_user: med.doseDetailsConfirmedByUser,
                 schedule_mode: med.scheduleMode.storageValue,
-                times_per_day: med.timesPerDay,
+                times_per_day: normalizedTimesPerDay,
                 times_per_week: med.timesPerWeek,
                 selected_weekdays: med.selectedWeekdays.isEmpty ? nil : med.selectedWeekdays,
                 interval_days: med.intervalDays,
@@ -746,6 +774,24 @@ final class UserMedsRepo: ObservableObject {
         UserDefaults.standard.string(forKey: "appearance.language") == "ar"
             ? "تعذر حفظ الدواء. يرجى المحاولة مرة أخرى."
             : "Couldn’t save the medication. Please try again."
+    }
+
+    private func medicationPermissionErrorMessage() -> String {
+        UserDefaults.standard.string(forKey: "appearance.language") == "ar"
+            ? "ليس لديك صلاحية لإدارة أدوية فرد العائلة هذا."
+            : "You do not have permission to manage medications for this family member."
+    }
+
+    private func medicationSaveMessage(for error: Error, isPatientContext: Bool) -> String {
+        let message = "\(error)".lowercased()
+        if isPatientContext,
+           message.contains("permission")
+            || message.contains("not allowed")
+            || message.contains("403")
+            || message.contains("access") {
+            return medicationPermissionErrorMessage()
+        }
+        return localizedMedicationSaveError()
     }
 
     #if DEBUG

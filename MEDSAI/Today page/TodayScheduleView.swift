@@ -57,6 +57,9 @@ struct TodayScheduleView: View {
                 .onChange(of: settings.activePatientID) { _, _ in
                     startTodayLoad(reason: "active_profile_changed")
                 }
+                .onReceive(NotificationCenter.default.publisher(for: .medicationsDidChange)) { _ in
+                    startTodayLoad(reason: "medications_changed")
+                }
                 .onChange(of: settings.breakfast) { _, _ in recomputeDoses() }
                 .onChange(of: settings.lunch) { _, _ in recomputeDoses() }
                 .onChange(of: settings.dinner) { _, _ in recomputeDoses() }
@@ -164,12 +167,32 @@ struct TodayScheduleView: View {
         await apptsRepo.fetchAppointments()
         recomputeDoses()
 
-        print("TODAY MED DEBUG fetched meds: \(medsRepo.meds.count)")
+        #if DEBUG
+        print("TODAY DEBUG fetched active meds:", medsRepo.meds.count)
         for med in medsRepo.meds {
-            print("TODAY MED: \(med.name) \(med.id) \(med.dosageTimes) \(med.frequencyPerDay) \(!med.isArchived)")
+            print(
+                "TODAY MED RAW:",
+                "name=", med.name,
+                "id=", med.id,
+                "isActive=", !med.isArchived,
+                "isPRN=", med.asNeeded,
+                "scheduleMode=", med.scheduleMode.storageValue,
+                "frequencyPerDay=", med.frequencyPerDay,
+                "timesPerDay=", med.timesPerDay as Any,
+                "dosageTimes=", med.dosageTimes,
+                "dosageTimesCount=", med.dosageTimes.count,
+                "selectedWeekdays=", med.selectedWeekdays,
+                "startDate=", med.startDate,
+                "endDate=", med.endDate,
+                "remindersEnabled=", med.remindersEnabled
+            )
         }
-        print("TODAY DOSE ITEMS: \(todaysDoses.count)")
-        print("TODAY MED GROUPS: \(todayMedicationGroups.count)")
+        print("TODAY DEBUG dose items:", todaysDoses.count)
+        for item in todaysDoses {
+            print("TODAY DOSE ITEM:", "med=", item.1.name, "time=", item.0, "sourceMedID=", item.1.id)
+        }
+        print("TODAY DEBUG medication groups:", todayMedicationGroups.count)
+        #endif
 
         var failedSections: [String] = []
         if medsRepo.errorMessage != nil { failedSections.append("medications") }
@@ -219,56 +242,10 @@ struct TodayScheduleView: View {
             return
         }
 
-        let cal = Calendar.current
-        let dayStart = cal.startOfDay(for: today)
-        let dayEnd = cal.date(byAdding: .day, value: 1, to: dayStart)!
-        let nextWake = cal.date(
-            bySettingHour: settings.wakeup.hour ?? 7,
-            minute: settings.wakeup.minute ?? 0,
-            second: 0,
-            of: dayEnd
-        ) ?? dayEnd.addingTimeInterval(7 * 3600)
-
-        let active = medsRepo.meds.filter { med in
-            guard !med.isArchived else { return false }
-            return med.startDate < dayEnd && med.endDate >= dayStart && med.isScheduled(on: dayStart, calendar: cal)
-        }
-
-        todaysDoses = DoseTextFormatter.deduplicatedDosePairs(active
-            .flatMap { med in doseDates(for: med, on: dayStart).map { ($0, med) } }
-            .filter { time, _ in time >= dayStart && time < nextWake }
-        )
-    }
-
-    private func doseDates(for med: LocalMed, on date: Date) -> [Date] {
-        let cal = Calendar.current
-        let base = cal.startOfDay(for: date)
-        let explicitTimes = med.dosageTimes.compactMap { timeString -> Date? in
-            let parts = timeString.split(separator: ":")
-            guard parts.count >= 2, let hour = Int(parts[0]), let minute = Int(parts[1]) else { return nil }
-            return cal.date(bySettingHour: hour, minute: minute, second: 0, of: base)
-        }
-        if !explicitTimes.isEmpty { return DoseTextFormatter.deduplicatedDoseDates(explicitTimes, calendar: cal) }
-
-        let adapted = Medication(
-            id: med.id,
-            name: med.name,
-            dosage: med.dosage,
-            frequencyPerDay: med.frequencyPerDay,
-            startDate: med.startDate,
-            endDate: med.endDate,
-            foodRule: med.foodRule,
-            notes: med.notes,
-            ingredients: med.ingredients,
-            minIntervalHours: med.minIntervalHours,
-            rxcui: med.rxcui,
-            dosageTimes: nil,
-            asNeeded: med.asNeeded,
-            isManualSchedule: med.isManualSchedule
-        )
-        return DoseTextFormatter.deduplicatedDoseDates(
-            Scheduler.preferredTimes(for: adapted, on: base, settings: settings),
-            calendar: cal
+        todaysDoses = MedicationDoseBuilder.dosePairs(
+            for: medsRepo.meds,
+            on: today,
+            settings: settings
         )
     }
 

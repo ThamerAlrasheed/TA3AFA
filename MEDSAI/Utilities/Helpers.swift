@@ -2,6 +2,10 @@ import SwiftUI
 import Foundation
 import UserNotifications
 
+extension Notification.Name {
+    static let medicationsDidChange = Notification.Name("medicationsDidChange")
+}
+
 // MARK: - Completion Store (Local persistence for Today's progress)
 
 enum CompletionStore {
@@ -469,6 +473,70 @@ enum Scheduler {
     private static func averageTime(_ a: Date, _ b: Date) -> Date {
         let mid = (a.timeIntervalSinceReferenceDate + b.timeIntervalSinceReferenceDate) / 2
         return Date(timeIntervalSinceReferenceDate: mid)
+    }
+}
+
+// MARK: - Shared medication dose builder
+
+struct MedicationDoseBuilder {
+    static func dosePairs(
+        for meds: [LocalMed],
+        on date: Date,
+        settings: AppSettings,
+        calendar: Calendar = .current
+    ) -> [(Date, LocalMed)] {
+        let dayStart = calendar.startOfDay(for: date)
+
+        let active = meds.filter { med in
+            guard !med.isArchived else { return false }
+            return med.isScheduled(on: dayStart, calendar: calendar)
+        }
+
+        return DoseTextFormatter.deduplicatedDosePairs(active.flatMap { med in
+            doseDates(for: med, on: dayStart, settings: settings, calendar: calendar).map { ($0, med) }
+        })
+    }
+
+    static func doseDates(
+        for med: LocalMed,
+        on date: Date,
+        settings: AppSettings,
+        calendar: Calendar = .current
+    ) -> [Date] {
+        let dayStart = calendar.startOfDay(for: date)
+        let explicitTimes = med.dosageTimes.compactMap { timeString -> Date? in
+            let parts = timeString.split(separator: ":")
+            guard parts.count >= 2,
+                  let hour = Int(parts[0]),
+                  let minute = Int(parts[1]) else { return nil }
+            return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: dayStart)
+        }
+
+        if !explicitTimes.isEmpty {
+            return DoseTextFormatter.deduplicatedDoseDates(explicitTimes, calendar: calendar)
+        }
+
+        let adapted = Medication(
+            id: med.id,
+            name: med.name,
+            dosage: med.dosage,
+            frequencyPerDay: max(med.timesPerDay ?? med.frequencyPerDay, 1),
+            startDate: med.startDate,
+            endDate: med.endDate,
+            foodRule: med.foodRule,
+            notes: med.notes,
+            ingredients: med.ingredients,
+            minIntervalHours: med.minIntervalHours,
+            rxcui: med.rxcui,
+            dosageTimes: nil,
+            asNeeded: med.asNeeded,
+            isManualSchedule: med.isManualSchedule
+        )
+
+        return DoseTextFormatter.deduplicatedDoseDates(
+            Scheduler.preferredTimes(for: adapted, on: dayStart, settings: settings),
+            calendar: calendar
+        )
     }
 }
 

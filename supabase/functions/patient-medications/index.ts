@@ -231,14 +231,117 @@ async function saveMedication(serviceClient: ReturnType<typeof createClient>, co
     user_id: context.patientId,
   };
 
-  const { data, error } = await serviceClient
+  let { data, error } = await serviceClient
     .from("user_medications")
     .upsert(row)
     .select()
     .single();
 
-  if (error) throw new FunctionError(500, "Could not save medication.");
+  if (error && isMedicationPayloadCompatibilityError(error)) {
+    console.error("patient-medications full save payload failed; retrying compatible payload", {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
+
+    const compatibleRow = compatibleMedicationRow(medication, context.patientId, String(row.id), true);
+    const retry = await serviceClient
+      .from("user_medications")
+      .upsert(compatibleRow)
+      .select()
+      .single();
+
+    data = retry.data;
+    error = retry.error;
+  }
+
+  if (error && isMedicationPayloadCompatibilityError(error)) {
+    console.error("patient-medications compatible save payload failed; retrying base payload", {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
+
+    const baseRow = compatibleMedicationRow(medication, context.patientId, String(row.id), false);
+    const retry = await serviceClient
+      .from("user_medications")
+      .upsert(baseRow)
+      .select()
+      .single();
+
+    data = retry.data;
+    error = retry.error;
+  }
+
+  if (error) {
+    console.error("patient-medications save failed", {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
+    throw new FunctionError(500, "Could not save medication.");
+  }
   return data;
+}
+
+function compatibleMedicationRow(
+  medication: Record<string, unknown>,
+  patientId: string,
+  id: string,
+  includeDisplayFields: boolean,
+) {
+  const row: Record<string, unknown> = {
+    id,
+    user_id: patientId,
+    medication_id: medication.medication_id,
+    name: medication.medication_name ?? medication.name ?? "Medication",
+    dosage: medication.dosage ?? "",
+    frequency_per_day: medication.frequency_per_day ?? medication.times_per_day ?? 1,
+    frequency_hours: medication.frequency_hours,
+    food_rule: medication.food_rule,
+    dosage_times: medication.dosage_times,
+    is_prn: medication.is_prn ?? false,
+    is_manual_schedule: medication.is_manual_schedule ?? true,
+    start_date: medication.start_date,
+    end_date: medication.end_date,
+    notes: medication.notes,
+    is_active: medication.is_active ?? true,
+  };
+
+  if (includeDisplayFields) {
+    row.visual_shape = medication.visual_shape;
+    row.visual_color = medication.visual_color;
+    row.visual_background_color = medication.visual_background_color;
+    row.medication_form = medication.medication_form;
+    row.schedule_mode = medication.schedule_mode;
+    row.times_per_day = medication.times_per_day;
+    row.selected_weekdays = medication.selected_weekdays;
+    row.interval_days = medication.interval_days;
+    row.reminders_enabled = medication.reminders_enabled;
+    row.caregiver_reminders_enabled = medication.caregiver_reminders_enabled;
+  }
+
+  return Object.fromEntries(Object.entries(row).filter(([, value]) => value !== undefined));
+}
+
+function isMedicationPayloadCompatibilityError(error: { code?: string; message?: string; details?: string; hint?: string }) {
+  const text = [
+    error.code,
+    error.message,
+    error.details,
+    error.hint,
+  ].filter(Boolean).join(" ").toLowerCase();
+
+  return text.includes("schema cache")
+    || text.includes("could not find")
+    || text.includes("column")
+    || text.includes("pgrst204")
+    || text.includes("42703")
+    || text.includes("invalid input value for enum")
+    || text.includes("food_rule_enum");
 }
 
 async function deleteMedication(serviceClient: ReturnType<typeof createClient>, patientId: string, id: string) {

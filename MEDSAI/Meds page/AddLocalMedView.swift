@@ -1054,13 +1054,14 @@ struct AddLocalMedView: View {
         let timeFmt = DateFormatter()
         timeFmt.dateFormat = "HH:mm:ss"
         let times = scheduleMode.isPRN ? [] : DoseTextFormatter.deduplicatedTimeStrings(dosageTimes.map { timeFmt.string(from: $0) })
+        let normalizedTimesPerDay = times.isEmpty ? max(timesPerDay, 1) : times.count
         let savedScheduleMode: MedicationScheduleMode = (!scheduleMode.isPRN && times.isEmpty) ? .asNeeded : scheduleMode
         let scanWasConfirmedInThisForm = scanMetadata?.scanSource == "manual_from_scan"
         let med = LocalMed(
             id: editingMed?.id ?? UUID().uuidString,
             name: name.trimmingCharacters(in: .whitespacesAndNewlines),
             dosage: displayDose,
-            frequencyPerDay: savedScheduleMode.isPRN ? 1 : max(timesPerDay, times.count, 1),
+            frequencyPerDay: savedScheduleMode.isPRN ? 1 : normalizedTimesPerDay,
             startDate: start,
             endDate: effectiveEndDate,
             foodRule: foodRule,
@@ -1096,7 +1097,7 @@ struct AddLocalMedView: View {
             isDoseAutoFilled: isDoseAutoFilled,
             doseDetailsConfirmedByUser: doseDetailsConfirmedByUser,
             scheduleMode: savedScheduleMode,
-            timesPerDay: savedScheduleMode == .daily ? timesPerDay : nil,
+            timesPerDay: savedScheduleMode == .daily ? normalizedTimesPerDay : nil,
             timesPerWeek: (savedScheduleMode == .weekly || savedScheduleMode == .specificDays) ? max(selectedWeekdays.count, 1) : nil,
             selectedWeekdays: savedScheduleMode.isPRN ? [] : Array(selectedWeekdays).sorted(),
             intervalDays: savedScheduleMode == .everyXDays ? intervalDays : nil,

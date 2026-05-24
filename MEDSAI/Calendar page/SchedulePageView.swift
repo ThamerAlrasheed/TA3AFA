@@ -168,45 +168,10 @@ struct SchedulePageView: View {
             return
         }
 
-        let active = repo.meds.filter { med in
-            guard !med.isArchived else { return false }
-            return med.isScheduled(on: selectedDate)
-        }
-
-        dayDoses = DoseTextFormatter.deduplicatedDosePairs(active.flatMap { med in
-            doseDates(for: med, on: selectedDate).map { ($0, med) }
-        })
-    }
-
-    private func doseDates(for med: LocalMed, on date: Date) -> [Date] {
-        let cal = Calendar.current
-        let base = cal.startOfDay(for: date)
-        let explicitTimes = med.dosageTimes.compactMap { timeString -> Date? in
-            let parts = timeString.split(separator: ":")
-            guard parts.count >= 2, let hour = Int(parts[0]), let minute = Int(parts[1]) else { return nil }
-            return cal.date(bySettingHour: hour, minute: minute, second: 0, of: base)
-        }
-        if !explicitTimes.isEmpty { return DoseTextFormatter.deduplicatedDoseDates(explicitTimes, calendar: cal) }
-
-        let adapted = Medication(
-            id: med.id,
-            name: med.name,
-            dosage: med.dosage,
-            frequencyPerDay: med.frequencyPerDay,
-            startDate: med.startDate,
-            endDate: med.endDate,
-            foodRule: med.foodRule,
-            notes: med.notes,
-            ingredients: med.ingredients,
-            minIntervalHours: med.minIntervalHours,
-            rxcui: med.rxcui,
-            dosageTimes: nil,
-            asNeeded: med.asNeeded,
-            isManualSchedule: med.isManualSchedule
-        )
-        return DoseTextFormatter.deduplicatedDoseDates(
-            Scheduler.preferredTimes(for: adapted, on: base, settings: settings),
-            calendar: cal
+        dayDoses = MedicationDoseBuilder.dosePairs(
+            for: repo.meds,
+            on: selectedDate,
+            settings: settings
         )
     }
 

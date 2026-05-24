@@ -1,4 +1,5 @@
 import SwiftUI
+import SDWebImageSwiftUI
 
 enum BrandedLoadingStyle {
     case inline
@@ -75,7 +76,7 @@ struct ISTSEHLoadingView: View {
 
     private var fullScreenBody: some View {
         VStack(spacing: 18) {
-            loadingMark(size: 66)
+            loadingGIF(size: 112)
             messageText(font: .system(.headline, design: .rounded).weight(.semibold), color: Color.istsehGreen)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -84,7 +85,7 @@ struct ISTSEHLoadingView: View {
 
     private var cardBody: some View {
         VStack(spacing: 14) {
-            loadingMark(size: 52)
+            loadingGIF(size: 78)
             messageText(font: .system(.subheadline, design: .rounded).weight(.semibold), color: .secondary)
         }
         .padding(22)
@@ -102,8 +103,7 @@ struct ISTSEHLoadingView: View {
 
     private var inlineBody: some View {
         HStack(spacing: 10) {
-            ProgressView()
-                .tint(Color.istsehGreen)
+            loadingGIF(size: 34)
 
             messageText(font: .system(.subheadline, design: .rounded), color: .secondary)
         }
@@ -111,8 +111,7 @@ struct ISTSEHLoadingView: View {
     }
 
     private var compactBody: some View {
-        ProgressView()
-            .tint(Color.istsehGreen)
+        loadingGIF(size: 34)
     }
 
     private func messageText(font: Font, color: Color) -> some View {
@@ -127,22 +126,13 @@ struct ISTSEHLoadingView: View {
     }
 
     @ViewBuilder
-    private func loadingMark(size: CGFloat) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
-                .fill(Color.istsehGreenSoft)
-                .frame(width: size, height: size)
-
-            Image(systemName: "pills.fill")
-                .font(.system(size: size * 0.42, weight: .semibold))
-                .foregroundStyle(Color.istsehGreen)
-        }
-        .overlay(alignment: .bottomTrailing) {
-            ProgressView()
-                .tint(Color.istsehGreen)
-                .scaleEffect(0.72)
-                .padding(size * 0.02)
-        }
+    private func loadingGIF(size: CGFloat) -> some View {
+        AnimatedImage(name: "loading_gif.gif")
+            .resizable()
+            .scaledToFit()
+            .frame(width: size, height: size)
+            .background(Color.clear)
+            .shadow(color: Color.istsehGreen.opacity(0.16), radius: 18, x: 0, y: 8)
         .accessibilityHidden(true)
     }
 }

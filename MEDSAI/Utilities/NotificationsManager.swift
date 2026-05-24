@@ -13,11 +13,12 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationsManager()
 
     struct IDs {
-        static let doseCategory = "DOSE_CATEGORY"
+        static let doseCategory = "MEDICATION_REMINDER"
         static let apptCategory = "APPT_CATEGORY"
         static let refillCategory = "REFILL_CATEGORY"
-        static let takeAction   = "TAKE_ACTION"
-        static let skipAction   = "SKIP_ACTION"
+        static let takeAction = "LOG_TAKEN"
+        static let skipAction = "LOG_SKIPPED"
+        static let remindLaterAction = "REMIND_LATER_10"
     }
 
     enum MedicationReminderContextType: String {
@@ -45,12 +46,13 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func configure() {
-        let takeAction = UNNotificationAction(identifier: IDs.takeAction, title: "Mark as Taken", options: [.foreground])
-        let skipAction = UNNotificationAction(identifier: IDs.skipAction, title: "Skip", options: [.destructive])
+        let takeAction = UNNotificationAction(identifier: IDs.takeAction, title: "Log as Taken", options: [])
+        let skipAction = UNNotificationAction(identifier: IDs.skipAction, title: "Log as Skipped", options: [])
+        let remindLaterAction = UNNotificationAction(identifier: IDs.remindLaterAction, title: "Remind Me in 10 Minutes", options: [])
 
         let doseCategory = UNNotificationCategory(
             identifier: IDs.doseCategory,
-            actions: [takeAction, skipAction],
+            actions: [takeAction, skipAction, remindLaterAction],
             intentIdentifiers: [],
             options: .customDismissAction
         )
@@ -85,13 +87,26 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    func schedule(id: String, title: String, body: String, at date: Date, categoryId: String? = nil, userInfo: [String: Any] = [:]) {
+    func schedule(
+        id: String,
+        title: String,
+        subtitle: String = "",
+        body: String,
+        at date: Date,
+        categoryId: String? = nil,
+        threadIdentifier: String? = nil,
+        timeSensitive: Bool = false,
+        userInfo: [String: Any] = [:]
+    ) {
         let content = UNMutableNotificationContent()
         content.title = title
+        content.subtitle = subtitle
         content.body = body
         content.sound = .default
         content.userInfo = userInfo
         if let cat = categoryId { content.categoryIdentifier = cat }
+        if let threadIdentifier { content.threadIdentifier = threadIdentifier }
+        if timeSensitive { content.interruptionLevel = .timeSensitive }
 
         let comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: date)
         let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
@@ -283,21 +298,24 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func scheduleMedicationReminder(_ med: LocalMed, context: MedicationReminderContext, at date: Date, doseIndex: Int) {
-        let copy = localizedMedicationCopy(med: med, context: context)
+        let copy = localizedMedicationCopy(med: med, context: context, scheduledAt: date)
         let notificationID = medicationNotificationID(medID: med.id, context: context, scheduledAt: date, doseIndex: doseIndex)
         let doseKey = Self.medicationDoseKey(medID: med.id, scheduledAt: date, ownerID: context.ownerID)
         let isoDate = ISO8601DateFormatter().string(from: date)
+        let doseText = doseDetailText(for: med, isArabic: Self.appLanguageCode() == "ar")
 
         var userInfo: [String: Any] = [
             "medicationId": med.id,
             "medId": med.id,
+            "medicationName": med.name,
             "doseId": doseKey,
             "doseKey": doseKey,
             "ownerPatientId": context.ownerID,
             "contextType": context.type.rawValue,
             "scheduledAt": isoDate,
             "notificationCategory": context.supportsDoseActions ? IDs.doseCategory : "MEDICATION_REMINDER",
-            "doseText": med.dosage
+            "doseText": doseText,
+            "snoozeCount": 0
         ]
         if let patientName = context.patientName {
             userInfo["patientName"] = patientName
@@ -306,9 +324,12 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
         schedule(
             id: notificationID,
             title: copy.title,
+            subtitle: copy.subtitle,
             body: copy.body,
             at: date,
             categoryId: context.supportsDoseActions ? IDs.doseCategory : nil,
+            threadIdentifier: "medication-reminders",
+            timeSensitive: true,
             userInfo: userInfo
         )
     }
@@ -502,29 +523,106 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
         let userInfo = response.notification.request.content.userInfo
         let action = response.actionIdentifier
 
-        if action == IDs.takeAction,
-           let key = userInfo["doseKey"] as? String,
-           let medId = (userInfo["medicationId"] as? String) ?? (userInfo["medId"] as? String) {
-            let scheduledAt = (userInfo["scheduledAt"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
-            let ownerID = (userInfo["ownerPatientId"] as? String).flatMap(UUID.init(uuidString:))
-            let source = (userInfo["contextType"] as? String) ?? "notification"
+        #if DEBUG
+        print("NOTIFICATION ACTION:", action)
+        print("Medication notification payload:", userInfo)
+        #endif
 
+        switch action {
+        case IDs.takeAction:
             Task { @MainActor in
-                CompletionStore.markDoseDone(key)
-                try? await SupabaseManager.shared.recordDoseEvent(
-                    medId: medId,
-                    scheduledAt: scheduledAt,
-                    status: .taken,
-                    patientID: ownerID,
-                    source: source
-                )
-                NotificationCenter.default.post(name: .doseCompletionChanged, object: nil)
+                self.handleDoseAction(userInfo: userInfo, status: .taken)
             }
+        case IDs.skipAction:
+            Task { @MainActor in
+                self.handleDoseAction(userInfo: userInfo, status: .skipped)
+            }
+        case IDs.remindLaterAction:
+            Task { @MainActor in
+                self.scheduleSnoozedMedicationReminder(from: response.notification.request.content)
+            }
+        default:
+            break
         }
         completionHandler()
     }
 
     // MARK: - Helpers
+
+    @MainActor
+    private func handleDoseAction(userInfo: [AnyHashable: Any], status: DoseStatus) {
+        guard let key = userInfo["doseKey"] as? String,
+              let medId = (userInfo["medicationId"] as? String) ?? (userInfo["medId"] as? String) else { return }
+
+        let scheduledAt = (userInfo["scheduledAt"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
+        let ownerID = (userInfo["ownerPatientId"] as? String).flatMap(UUID.init(uuidString:))
+        let source = (userInfo["contextType"] as? String) ?? "notification"
+
+        Task { @MainActor in
+            CompletionStore.markDoseDone(key)
+            if status == .skipped {
+                var skipped = DailyDoseStatusStore.skippedDoses()
+                skipped.insert(key)
+                DailyDoseStatusStore.setSkippedDoses(skipped)
+            }
+
+            try? await SupabaseManager.shared.recordDoseEvent(
+                medId: medId,
+                scheduledAt: scheduledAt,
+                status: status,
+                patientID: ownerID,
+                source: source
+            )
+            NotificationCenter.default.post(name: .doseCompletionChanged, object: nil)
+        }
+    }
+
+    @MainActor
+    private func scheduleSnoozedMedicationReminder(from content: UNNotificationContent) {
+        let userInfo = content.userInfo
+        let snoozeCount = userInfo["snoozeCount"] as? Int ?? 0
+        guard snoozeCount < 3 else { return }
+
+        var nextUserInfo = userInfo.reduce(into: [String: Any]()) { partial, item in
+            partial[String(describing: item.key)] = item.value
+        }
+        nextUserInfo["snoozeCount"] = snoozeCount + 1
+        nextUserInfo["isSnoozeReminder"] = true
+
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 10 * 60, repeats: false)
+        let nextContent = UNMutableNotificationContent()
+        nextContent.title = content.title
+        nextContent.subtitle = content.subtitle.isEmpty ? snoozeSubtitle() : content.subtitle
+        nextContent.body = snoozeBody(originalBody: content.body)
+        nextContent.sound = .default
+        nextContent.categoryIdentifier = IDs.doseCategory
+        nextContent.threadIdentifier = "medication-reminders"
+        nextContent.interruptionLevel = .timeSensitive
+        nextContent.userInfo = nextUserInfo
+
+        let medId = (userInfo["medicationId"] as? String) ?? (userInfo["medId"] as? String) ?? UUID().uuidString
+        let request = UNNotificationRequest(
+            identifier: "SNOOZE_\(stableIdentifierComponent(medId))_\(Int(Date().timeIntervalSince1970))",
+            content: nextContent,
+            trigger: trigger
+        )
+
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                print("Snooze notification scheduling failed:", error.localizedDescription)
+            }
+        }
+    }
+
+    private func snoozeSubtitle() -> String {
+        Self.appLanguageCode() == "ar" ? "تذكير بعد 10 دقائق" : "Reminder in 10 minutes"
+    }
+
+    private func snoozeBody(originalBody: String) -> String {
+        let isArabic = Self.appLanguageCode() == "ar"
+        if isArabic { return "تذكير مرة أخرى: \(originalBody)" }
+        return "Reminder again: \(originalBody)"
+    }
 
     private func parseDoseTime(_ value: String) -> DateComponents? {
         let parts = value.split(separator: ":")
@@ -532,26 +630,60 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
         return DateComponents(hour: Int(parts[0]), minute: Int(parts[1]))
     }
 
-    private func localizedMedicationCopy(med: LocalMed, context: MedicationReminderContext) -> (title: String, body: String) {
+    private func localizedMedicationCopy(med: LocalMed, context: MedicationReminderContext, scheduledAt date: Date) -> (title: String, subtitle: String, body: String) {
         let isArabic = Self.appLanguageCode() == "ar"
-        let actionText = med.doseActionText(isArabic: isArabic)
+        let medName = DoseTextFormatter.medicationTitle(med.name)
+        let doseText = doseDetailText(for: med, isArabic: isArabic)
+        let foodText = MedicationFormRules.shouldShowFoodTiming(
+            formID: med.medicationForm,
+            foodRule: med.foodRule,
+            sourceBacked: med.foodRuleSource == "source"
+        ) ? med.foodRuleLabel(isArabic: isArabic) : ""
+        let detail = [doseText, foodText]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: isArabic ? "، " : ". ")
+        let subtitle = isArabic ? "مجدول في \(timeString(for: date))" : "Scheduled for \(timeString(for: date))"
         let patientName = context.patientName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let safePatientName = (patientName?.isEmpty == false) ? patientName! : fallbackPatientName()
 
         switch (context.type, isArabic) {
         case (.selfUser, false):
-            return ("Medication Reminder", actionText)
+            let body = detail.isEmpty ? "\(medName) is due now. Tap to log it." : "\(medName) is due now. \(detail)."
+            return ("Medication Reminder", subtitle, body)
         case (.selfUser, true):
-            return ("تذكير بالدواء", actionText)
+            let body = detail.isEmpty ? "\(medName) مستحق الآن. اضغط لتسجيله." : "\(medName) مستحق الآن. \(detail)."
+            return ("تذكير بالدواء", subtitle, body)
         case (.patient, false):
-            return ("Medication Reminder for \(safePatientName)", "\(safePatientName): \(actionText)")
+            let body = detail.isEmpty ? "\(safePatientName): \(medName) is due now." : "\(safePatientName): \(medName) is due now. \(detail)."
+            return ("Medication Reminder", subtitle, body)
         case (.patient, true):
-            return ("تذكير بدواء \(safePatientName)", "\(safePatientName): \(actionText)")
+            let body = detail.isEmpty ? "\(safePatientName): \(medName) مستحق الآن." : "\(safePatientName): \(medName) مستحق الآن. \(detail)."
+            return ("تذكير بالدواء", subtitle, body)
         case (.caregiver, false):
-            return ("Caregiver Reminder", "\(safePatientName) has a medication due: \(actionText)")
+            let body = detail.isEmpty ? "\(safePatientName) has a medication due now: \(medName)." : "\(safePatientName) has \(medName) due now. \(detail)."
+            return ("Caregiver Reminder", subtitle, body)
         case (.caregiver, true):
-            return ("تذكير لمقدم الرعاية", "لدى \(safePatientName) دواء مستحق الآن: \(actionText)")
+            let body = detail.isEmpty ? "لدى \(safePatientName) دواء مستحق الآن: \(medName)." : "لدى \(safePatientName) دواء مستحق الآن: \(medName). \(detail)."
+            return ("تذكير لمقدم الرعاية", subtitle, body)
         }
+    }
+
+    private func doseDetailText(for med: LocalMed, isArabic: Bool) -> String {
+        if let dose = DoseTextFormatter.formatDoseAmount(for: med), !dose.isEmpty {
+            return dose
+        }
+        let trimmed = med.dosage.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { return trimmed }
+        return isArabic ? "جرعة واحدة" : "1 dose"
+    }
+
+    private func timeString(for date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: Self.appLanguageCode() == "ar" ? "ar" : "en_US")
+        formatter.timeStyle = .short
+        formatter.dateStyle = .none
+        return formatter.string(from: date)
     }
 
     private func fallbackPatientName() -> String {
