@@ -43,6 +43,7 @@ struct MediScheduleApp: App {
                 await settings.bootstrapAuthenticatedSession()
                 medsRepo.start()
                 refreshRemindersIfAuthorized()
+                NotificationsManager.shared.registerForRemoteNotificationsIfAuthorized()
                 return
             }
         } catch {
@@ -74,6 +75,7 @@ struct MediScheduleApp: App {
                     await settings.loadRoutineFromSupabase()
                     medsRepo.start()
                     refreshRemindersIfAuthorized()
+                    NotificationsManager.shared.registerForRemoteNotificationsIfAuthorized()
                     return
                 }
             } catch {

@@ -119,7 +119,6 @@ final class UserMedsRepo: ObservableObject {
             .sink { [weak self] _ in
                 Task {
                     await self?.fetchMeds()
-                    self?.refreshAllReminders()
                 }
             }
             .store(in: &cancellables)
@@ -164,7 +163,7 @@ final class UserMedsRepo: ObservableObject {
         print("currentAuthUserID:", supabase.authenticatedUserID as Any)
         print("activePatientID:", supabase.activePatientID as Any)
         print("resolvedFetchOwnerID:", uidString)
-        print("fetch mode:", (supabase.activePatientID == nil && !supabase.isPatientMode) ? "self" : "patient/caregiver")
+        print("fetch mode:", debugCareContextMode())
 
         // Only show full-screen loading on initial load (when we have no data yet)
         let isFirstLoad = !hasLoadedOnce && meds.isEmpty
@@ -191,7 +190,7 @@ final class UserMedsRepo: ObservableObject {
                 #endif
                 self.meds = loadedMeds
                 self.hasLoadedOnce = true
-                loadedMeds.forEach { NotificationsManager.shared.updateReminders(for: $0) }
+                NotificationsManager.shared.refreshMedicationNotifications(for: loadedMeds, reason: "patient_meds_loaded")
                 await refreshSafetyWarnings(for: loadedMeds)
                 return
 
@@ -217,7 +216,7 @@ final class UserMedsRepo: ObservableObject {
                 #endif
                 self.meds = loadedMeds
                 self.hasLoadedOnce = true
-                loadedMeds.forEach { NotificationsManager.shared.updateReminders(for: $0) }
+                NotificationsManager.shared.refreshMedicationNotifications(for: loadedMeds, reason: "self_meds_loaded")
                 await refreshSafetyWarnings(for: loadedMeds)
             }
         } catch is CancellationError {
@@ -340,7 +339,7 @@ final class UserMedsRepo: ObservableObject {
         print("resolvedOwnerID:", uidString)
         print("isSelfMode:", supabase.activePatientID == nil && !supabase.isPatientMode)
         print("isFamilyMemberMode:", supabase.activePatientID != nil)
-        print("save route:", supabase.activePatientID == nil && !supabase.isPatientMode ? "direct user_medications" : "patient-medications edge function or caregiver-safe route")
+        print("save route:", debugSaveRoute())
         print("payload medication_name:", med.name)
         print("payload user_id:", uidString)
         debugMedicationSaveStarted(med, ownerID: uidString, endpoint: supabase.isPatientMode || supabase.activePatientID != nil ? "patient-medications" : "user_medications")
@@ -359,7 +358,6 @@ final class UserMedsRepo: ObservableObject {
                 #if DEBUG
                 debugMedicationRefreshStatus(errorMessage)
                 #endif
-                NotificationsManager.shared.updateReminders(for: med)
                 print("MED SAVE SUCCESS id:", med.id)
             } catch {
                 #if DEBUG
@@ -427,7 +425,7 @@ final class UserMedsRepo: ObservableObject {
         print("currentAuthUserID:", supabase.authenticatedUserID as Any)
         print("activePatientID:", supabase.activePatientID as Any)
         print("resolvedOwnerID:", uidString)
-        print("mode:", supabase.activePatientID == nil ? "self" : "patient/caregiver")
+        print("mode:", debugCareContextMode())
         print("payload user_id:", payload.user_id)
         print("medication_name:", payload.medication_name as Any)
         print("medication_id:", payload.medication_id as Any)
@@ -446,7 +444,6 @@ final class UserMedsRepo: ObservableObject {
             print("MED SAVE SUCCESS rows:", savedRows.count)
             print("MED SAVE SUCCESS first:", savedRows.first as Any)
 
-            NotificationsManager.shared.updateReminders(for: med)
             await fetchMeds()
             NotificationCenter.default.post(name: .medicationsDidChange, object: nil)
             #if DEBUG
@@ -468,7 +465,6 @@ final class UserMedsRepo: ObservableObject {
                     print("MED SAVE SUCCESS rows:", savedRows.count)
                     print("MED SAVE SUCCESS first:", savedRows.first as Any)
 
-                    NotificationsManager.shared.updateReminders(for: med)
                     await fetchMeds()
                     NotificationCenter.default.post(name: .medicationsDidChange, object: nil)
                     #if DEBUG
@@ -651,8 +647,6 @@ final class UserMedsRepo: ObservableObject {
         do {
             if archived {
                 NotificationsManager.shared.cancelReminders(for: med.id)
-            } else {
-                NotificationsManager.shared.updateReminders(for: med)
             }
 
             switch ownerContext {
@@ -661,8 +655,6 @@ final class UserMedsRepo: ObservableObject {
                 await fetchMeds()
                 if archived {
                     NotificationsManager.shared.cancelReminders(for: med.id)
-                } else {
-                    NotificationsManager.shared.updateReminders(for: med)
                 }
                 
             case .selfUser:
@@ -717,10 +709,10 @@ final class UserMedsRepo: ObservableObject {
                         await add(currentMed)
                     }
                     
-                    // 2. Update local notifications
-                    NotificationsManager.shared.updateReminders(for: currentMed)
+                    // 2. Batched local notification refresh happens once after the loop.
                 }
             }
+            NotificationsManager.shared.refreshMedicationNotifications(for: meds, reason: "refresh_all_reminders")
         }
     }
 
@@ -792,6 +784,32 @@ final class UserMedsRepo: ObservableObject {
             return medicationPermissionErrorMessage()
         }
         return localizedMedicationSaveError()
+    }
+
+    private func debugCareContextMode() -> String {
+        switch supabase.resolveActiveCareContext() {
+        case .selfUser:
+            return "self"
+        case .managedPatient:
+            return "authenticated caregiver"
+        case .linkedPatient:
+            return "care-code linked patient"
+        case .none:
+            return "none"
+        }
+    }
+
+    private func debugSaveRoute() -> String {
+        switch supabase.resolveActiveCareContext() {
+        case .selfUser:
+            return "direct user_medications"
+        case .managedPatient:
+            return "patient-medications edge function (authenticated caregiver target_patient_id)"
+        case .linkedPatient:
+            return "patient-medications edge function (care-code device token)"
+        case .none:
+            return "none"
+        }
     }
 
     #if DEBUG

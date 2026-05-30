@@ -13,6 +13,7 @@ struct TodayScheduleView: View {
     @State private var completedAppointments: Set<String> = CompletionStore.completedAppointments()
     @State private var completedDoseKeys: Set<String> = CompletionStore.completedDoses()
     @State private var skippedDoseKeys: Set<String> = DailyDoseStatusStore.skippedDoses()
+    @State private var remoteDoseStatuses: [String: DoseDisplayStatus] = [:]
     @State private var viewingAppointment: Appointment? = nil
     @State private var viewingMedication: LocalMed? = nil
     @State private var hasLoadedSchedule = false
@@ -59,6 +60,9 @@ struct TodayScheduleView: View {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: .medicationsDidChange)) { _ in
                     startTodayLoad(reason: "medications_changed")
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .doseCompletionChanged)) { _ in
+                    startTodayLoad(reason: "dose_notification_action")
                 }
                 .onChange(of: settings.breakfast) { _, _ in recomputeDoses() }
                 .onChange(of: settings.lunch) { _, _ in recomputeDoses() }
@@ -166,6 +170,8 @@ struct TodayScheduleView: View {
         await medsRepo.fetchMeds()
         await apptsRepo.fetchAppointments()
         recomputeDoses()
+        await loadRemoteDoseStatuses()
+        await syncMissedDosesIfNeeded()
 
         #if DEBUG
         print("TODAY DEBUG fetched active meds:", medsRepo.meds.count)
@@ -232,6 +238,7 @@ struct TodayScheduleView: View {
     private func doseStatus(for key: String, scheduledAt: Date) -> DoseDisplayStatus {
         if skippedDoseKeys.contains(key) { return .skipped }
         if completedDoseKeys.contains(key) { return .taken }
+        if let remoteStatus = remoteDoseStatuses[key] { return remoteStatus }
         if scheduledAt < Date() { return .missed }
         return .pending
     }
@@ -277,8 +284,10 @@ struct TodayScheduleView: View {
                     try await SupabaseManager.shared.recordDoseEvent(
                         medId: item.medicationID,
                         scheduledAt: item.scheduledAt,
-                        status: .taken
+                        status: .taken,
+                        source: "today_button"
                     )
+                    await loadRemoteDoseStatuses()
                 } catch {
                     print("⚠️ Failed to sync dose event:", error)
                 }
@@ -296,10 +305,75 @@ struct TodayScheduleView: View {
                 try await SupabaseManager.shared.recordDoseEvent(
                     medId: item.medicationID,
                     scheduledAt: item.scheduledAt,
-                    status: .skipped
+                    status: .skipped,
+                    source: "today_button"
                 )
+                await loadRemoteDoseStatuses()
             } catch {
                 print("⚠️ Failed to sync skipped event:", error)
+            }
+        }
+    }
+
+    private func loadRemoteDoseStatuses() async {
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: today)
+        let end = calendar.date(byAdding: .day, value: 1, to: start) ?? start.addingTimeInterval(86_400)
+
+        do {
+            let snapshots = try await SupabaseManager.shared.fetchDoseEventStatusSnapshots(start: start, end: end)
+            var statuses: [String: DoseDisplayStatus] = [:]
+            for snapshot in snapshots {
+                let key = doseKey(time: snapshot.scheduledAt, medID: snapshot.medicationID)
+                switch snapshot.status {
+                case .taken:
+                    statuses[key] = .taken
+                    completedDoseKeys.insert(key)
+                    skippedDoseKeys.remove(key)
+                case .skipped:
+                    statuses[key] = .skipped
+                    completedDoseKeys.insert(key)
+                    skippedDoseKeys.insert(key)
+                case .missed:
+                    statuses[key] = .missed
+                case .scheduled:
+                    break
+                }
+            }
+            remoteDoseStatuses = statuses
+            persistDoseState()
+        } catch {
+            #if DEBUG
+            print("⚠️ Failed to load remote dose events:", error)
+            #endif
+        }
+    }
+
+    private func syncMissedDosesIfNeeded() async {
+        let graceInterval: TimeInterval = 45 * 60
+        let missedCandidates = todaysDoses.filter { pair in
+            let (scheduledAt, med) = pair
+            let key = doseKey(time: scheduledAt, medID: med.id)
+            return scheduledAt.addingTimeInterval(graceInterval) < Date()
+                && !completedDoseKeys.contains(key)
+                && !skippedDoseKeys.contains(key)
+                && remoteDoseStatuses[key] == nil
+        }
+
+        for (scheduledAt, med) in missedCandidates {
+            do {
+                try await SupabaseManager.shared.recordDoseEvent(
+                    medId: med.id,
+                    scheduledAt: scheduledAt,
+                    status: .missed,
+                    source: "patient_device"
+                )
+                let key = doseKey(time: scheduledAt, medID: med.id)
+                remoteDoseStatuses[key] = .missed
+            } catch {
+                #if DEBUG
+                print("⚠️ Failed to sync missed dose event:", error)
+                #endif
             }
         }
     }

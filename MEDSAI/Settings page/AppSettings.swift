@@ -71,6 +71,7 @@ final class AppSettings: ObservableObject {
     @Published var appearanceMode: AppearanceMode
     @Published var sessionRevokedMessage: String? = nil
     @Published var isProfileLoading = false
+    @Published private(set) var isSwitchingPatientContext = false
     @Published var profileLoadError: String? = nil
     @Published var loadedProfileUserID: UUID? = nil
 
@@ -203,6 +204,9 @@ final class AppSettings: ObservableObject {
     func signOutCompletely() async {
         let previousContext = supabase.resolveActiveCareContext()
         print("LOGOUT DEBUG clearing activePatientID:", activePatientID as Any)
+        if let token = NotificationsManager.currentAPNSToken {
+            await SupabaseManager.shared.deactivatePushToken(token: token)
+        }
         UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
         try? await supabase.client.auth.signOut()
         PatientSessionStore.shared.clearAllSessionValuesBestEffort()
@@ -253,14 +257,68 @@ final class AppSettings: ObservableObject {
 
     @MainActor
     func actAsPatient(id: UUID, displayName: String) {
+        let normalizedID = id.uuidString.lowercased()
+        guard activePatientID != normalizedID || activePatientName != displayName else {
+            debugSessionLog("actAsPatient skipped duplicate")
+            return
+        }
         activePatientName = displayName
-        activePatientID = id.uuidString.lowercased()
+        activePatientID = normalizedID
     }
 
     @MainActor
     func stopActingAsPatient() {
+        guard activePatientID != nil || activePatientName != nil else {
+            debugSessionLog("stopActingAsPatient skipped duplicate")
+            return
+        }
         activePatientID = nil
         activePatientName = nil
+    }
+
+    @MainActor
+    func switchToPatient(id: UUID, displayName: String) async -> Bool {
+        let normalizedID = id.uuidString.lowercased()
+        guard activePatientID != normalizedID || activePatientName != displayName else {
+            debugSessionLog("switchToPatient skipped duplicate")
+            return false
+        }
+        guard !isSwitchingPatientContext else {
+            debugSessionLog("switchToPatient skipped already switching")
+            return false
+        }
+
+        isSwitchingPatientContext = true
+        defer { isSwitchingPatientContext = false }
+
+        let previousContext = supabase.resolveActiveCareContext()
+        activePatientName = displayName
+        activePatientID = normalizedID
+        await loadRoutineFromSupabase()
+        debugSessionLog("switchToPatient", previousContext: previousContext)
+        return true
+    }
+
+    @MainActor
+    func switchToSelfProfile() async -> Bool {
+        guard activePatientID != nil || activePatientName != nil else {
+            debugSessionLog("switchToSelfProfile skipped duplicate")
+            return false
+        }
+        guard !isSwitchingPatientContext else {
+            debugSessionLog("switchToSelfProfile skipped already switching")
+            return false
+        }
+
+        isSwitchingPatientContext = true
+        defer { isSwitchingPatientContext = false }
+
+        let previousContext = supabase.resolveActiveCareContext()
+        activePatientID = nil
+        activePatientName = nil
+        await loadRoutineFromSupabase()
+        debugSessionLog("switchToSelfProfile", previousContext: previousContext)
+        return true
     }
 
     var activeCareDisplayName: String {

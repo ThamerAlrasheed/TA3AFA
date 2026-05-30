@@ -1,0 +1,13 @@
+# Supabase project configuration.
+# See: https://supabase.com/docs/guides/functions/deploy#deploying-functions
+
+# redeem-care-code is a pre-login public endpoint.
+# Patients enter a family code before they have a Supabase Auth session,
+# so JWT verification must be disabled. The function validates the care code
+# and device token internally using the service role key.
+[functions.redeem-care-code]
+verify_jwt = false
+
+[functions.patient-medications]
+verify_jwt = false
+

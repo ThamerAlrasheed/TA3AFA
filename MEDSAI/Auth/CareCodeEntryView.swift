@@ -6,6 +6,12 @@ struct CareCodeEntryView: View {
     @State private var code: String = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
+
+    private static let codeLength = 6
+
+    private var cleanCode: String {
+        Self.normalizedCode(code)
+    }
     
     var body: some View {
         VStack(spacing: 32) {
@@ -19,7 +25,7 @@ struct CareCodeEntryView: View {
                 Text("Enter Family Code")
                     .font(.system(size: 28, weight: .bold, design: .rounded))
                 
-                Text("Ask your caregiver for the 6-digit code to connect your account.")
+                Text("Ask your caregiver for the 6-digit family code.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)
@@ -27,24 +33,33 @@ struct CareCodeEntryView: View {
             }
             .padding(.top, 60)
             
-            // Keep the actual TextField alive in layout to avoid keyboard-session glitches.
+            // Invisible TextField drives keyboard input.
+            // Visible CharacterBox row renders the digits.
             ZStack {
-                HStack(spacing: 12) {
-                    ForEach(0..<6, id: \.self) { index in
+                HStack(spacing: 8) {
+                    ForEach(0..<Self.codeLength, id: \.self) { index in
                         CharacterBox(char: character(at: index))
                     }
                 }
 
                 TextField("", text: $code)
                     .keyboardType(.numberPad)
-                    .textContentType(.oneTimeCode)
                     .focused($isTextFieldFocused)
                     .frame(width: 1, height: 1)
                     .opacity(0.01)
                     .onChange(of: code) { _, newValue in
-                        if newValue.count > 6 {
-                            code = String(newValue.prefix(6))
+                        let normalized = Self.normalizedCode(newValue)
+                        // Keep only digits, max 6 chars.
+                        if normalized != newValue {
+                            code = normalized
                         }
+                        // Clear any stale error as soon as the user edits.
+                        if errorMessage != nil {
+                            errorMessage = nil
+                        }
+                        #if DEBUG
+                        print("DEBUG CareCodeEntryView: code changed, digitCount=\(normalized.count)")
+                        #endif
                     }
             }
             .contentShape(Rectangle())
@@ -52,20 +67,28 @@ struct CareCodeEntryView: View {
                 isTextFieldFocused = true
             }
             
-            if let error = errorMessage {
+            // Only show error when it is non-nil AND code is not being actively typed
+            // (prevents stale errors from a previous session appearing with empty boxes).
+            if let error = errorMessage, !error.isEmpty {
                 Text(error)
                     .font(.footnote)
                     .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
                     .transition(.opacity)
             }
             
             Spacer()
             
             Button {
-                validateCode()
+                submitCode()
             } label: {
                 HStack {
-                    if isLoading { ProgressView().controlSize(.small).padding(.trailing, 8) }
+                    if isLoading {
+                        ISTSEHLoadingView(message: "", style: .compact)
+                            .frame(width: 24, height: 24)
+                            .padding(.trailing, 8)
+                    }
                     Text("Connect")
                         .font(.headline)
                 }
@@ -74,12 +97,17 @@ struct CareCodeEntryView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.green)
-            .disabled(code.count < 6 || isLoading)
+            .disabled(cleanCode.count != Self.codeLength || isLoading)
             .padding(.horizontal, 24)
             .padding(.bottom, 40)
         }
         .navigationBarTitleDisplayMode(.inline)
         .onAppear {
+            // Always reset state when view appears so a previous
+            // failed attempt's error is never shown with empty boxes.
+            code = ""
+            errorMessage = nil
+            isLoading = false
             DispatchQueue.main.async {
                 isTextFieldFocused = true
             }
@@ -89,33 +117,65 @@ struct CareCodeEntryView: View {
     @FocusState private var isTextFieldFocused: Bool
     
     private func character(at index: Int) -> String {
-        guard index < code.count else { return "" }
-        let charIndex = code.index(code.startIndex, offsetBy: index)
-        return String(code[charIndex])
+        let digits = cleanCode
+        guard index < digits.count else { return "" }
+        let charIndex = digits.index(digits.startIndex, offsetBy: index)
+        return String(digits[charIndex])
     }
     
-    private func validateCode() {
+    // Called ONLY by the Connect button tap.
+    private func submitCode() {
+        let submittedCode = cleanCode
+
+        // Silent guard — button is already disabled when count < 6.
+        guard submittedCode.count == Self.codeLength else {
+            #if DEBUG
+            print("DEBUG CareCodeEntryView: blocked redeem — code count != 6 (actual=\(submittedCode.count))")
+            #endif
+            return
+        }
+
+        #if DEBUG
+        print("DEBUG CareCodeEntryView: [1] submit started, digitCount=\(submittedCode.count)")
+        #endif
+
         isLoading = true
         errorMessage = nil
         
         Task {
             do {
-                try? await SupabaseManager.shared.client.auth.signOut()
+                // Clear any stale caregiver context before redeeming.
                 await MainActor.run {
                     settings.resetUserScopedState()
                     settings.stopActingAsPatient()
                 }
+                #if DEBUG
+                print("DEBUG CareCodeEntryView: [2] context cleared, calling redeemCareCode")
+                #endif
 
-                let result = try await SupabaseManager.shared.redeemCareCode(code)
+                let result = try await SupabaseManager.shared.redeemCareCode(submittedCode)
+
+                #if DEBUG
+                print("DEBUG CareCodeEntryView: [3] redeemCareCode returned, saving session")
+                #endif
 
                 try PatientSessionStore.shared.savePatientSession(
                     patientID: result.patientID,
                     deviceToken: result.deviceToken
                 )
 
-                NotificationCenter.default.post(name: NSNotification.Name("SupabaseContextChanged"), object: nil)
+                #if DEBUG
+                print("DEBUG CareCodeEntryView: [4] session saved to keychain")
+                #endif
+
+                NotificationCenter.default.post(
+                    name: NSNotification.Name("SupabaseContextChanged"), object: nil
+                )
 
                 await MainActor.run {
+                    #if DEBUG
+                    print("DEBUG CareCodeEntryView: [5] setting app state and dismissing")
+                    #endif
                     isLoading = false
                     settings.role = .patient
                     settings.onboardingCompleted = true
@@ -123,14 +183,33 @@ struct CareCodeEntryView: View {
                     dismiss()
                 }
             } catch {
+                #if DEBUG
+                print("DEBUG CareCodeEntryView: [ERROR] \(error)")
+                #endif
                 await MainActor.run {
                     isLoading = false
-                    errorMessage = error.localizedDescription
-                    self.code = ""
+                    let msg = error.localizedDescription.lowercased()
+                    if msg.contains("invalid") ||
+                       msg.contains("expired") ||
+                       msg.contains("used") ||
+                       msg.contains("6-digit") {
+                        errorMessage = "Invalid family code. Please check the code and try again."
+                    } else if msg.contains("finish setup") || msg.contains("restart") {
+                        errorMessage = "Code accepted, but the app could not finish setup. Please restart and try again."
+                    } else {
+                        errorMessage = "Could not connect right now. Please try again."
+                    }
+                    // Keep the entered code so the user can edit and retry.
                 }
             }
         }
     }
+
+    private static func normalizedCode(_ value: String) -> String {
+        let digits = value.filter { $0.isNumber }
+        return String(digits.prefix(codeLength))
+    }
+
 }
 
 private struct CharacterBox: View {

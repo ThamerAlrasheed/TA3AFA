@@ -25,6 +25,37 @@ struct FamilySettingsView: View {
 
     private var supabase: SupabaseManager { .shared }
 
+    fileprivate static func displayName(firstName: String, lastName: String) -> String {
+        [firstName, lastName]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    fileprivate static func isVisibleRelationStatus(_ status: String) -> Bool {
+        !["removed", "revoked", "inactive", "deleted"].contains(status.lowercased())
+    }
+
+    private static func displayStatus(relationStatus: String, inviteStatus: InviteStatus?) -> String {
+        guard isVisibleRelationStatus(relationStatus) else { return "removed" }
+        switch inviteStatus {
+        case .linked:
+            return "active"
+        case .pending:
+            return "pending"
+        case .expired:
+            return "invite_expired"
+        case .none:
+            return "managed"
+        }
+    }
+
+    private enum InviteStatus {
+        case pending
+        case linked
+        case expired
+    }
+
     var body: some View {
         List {
             Section {
@@ -50,18 +81,50 @@ struct FamilySettingsView: View {
             }
             
             Section {
-                SettingsActionRow(
-                    icon: "person.badge.plus",
-                    text: SettingsL10n.text("Add Family Member", "إضافة فرد من العائلة")
-                ) {
-                    showingAddMember = true
+                if settings.activePatientID != nil {
+                    // Patient context — block adding family members (account-level action)
+                    VStack(alignment: isArabic ? .trailing : .leading, spacing: 8) {
+                        Label {
+                            Text(SettingsL10n.text(
+                                "You're viewing a family member. Switch to My Profile to add another family member.",
+                                "أنت تعرض ملف فرد عائلة. انتقل إلى ملفي الشخصي لإضافة فرد آخر."
+                            ))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(isArabic ? .trailing : .leading)
+                        } icon: {
+                            Image(systemName: "info.circle")
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Button {
+                            Task { _ = await settings.switchToSelfProfile() }
+                        } label: {
+                            Label(
+                                SettingsL10n.text("Switch to My Profile", "انتقل إلى ملفي الشخصي"),
+                                systemImage: "person.circle"
+                            )
+                            .font(.subheadline.weight(.semibold))
+                        }
+                        .foregroundStyle(Color.istsehGreen)
+                    }
+                    .padding(.vertical, 4)
+                } else {
+                    SettingsActionRow(
+                        icon: "person.badge.plus",
+                        text: SettingsL10n.text("Add Family Member", "إضافة فرد من العائلة")
+                    ) {
+                        showingAddMember = true
+                    }
                 }
             } footer: {
-                Text(SettingsL10n.text(
-                    "Adding a family member allows you to manage their medications and schedule.",
-                    "إضافة فرد من العائلة تتيح لك إدارة أدويته وجدوله."
-                ))
-                    .multilineTextAlignment(isArabic ? .trailing : .leading)
+                if settings.activePatientID == nil {
+                    Text(SettingsL10n.text(
+                        "Adding a family member allows you to manage their medications and schedule.",
+                        "إضافة فرد من العائلة تتيح لك إدارة أدويته وجدوله."
+                    ))
+                        .multilineTextAlignment(isArabic ? .trailing : .leading)
+                }
             }
             .listRowSeparator(.hidden)
         }
@@ -86,7 +149,7 @@ struct FamilySettingsView: View {
     }
 
     private func displayName(for patient: PatientProfile) -> String {
-        "\(patient.firstName) \(patient.lastName)".trimmingCharacters(in: .whitespacesAndNewlines)
+        Self.displayName(firstName: patient.firstName, lastName: patient.lastName)
     }
 
     private var patientIcon: some View {
@@ -128,9 +191,9 @@ struct FamilySettingsView: View {
                 .font(.caption2)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
-                .background(patient.status == "active" ? Color.istsehGreenSoft : .orange.opacity(0.12))
+                .background(statusColor(patient.status).opacity(0.12))
                 .clipShape(Capsule())
-                .foregroundStyle(patient.status == "active" ? Color.istsehGreen : .orange)
+                .foregroundStyle(statusColor(patient.status))
                 .frame(maxWidth: .infinity, alignment: isArabic ? .trailing : .leading)
         }
         .frame(maxWidth: .infinity, alignment: isArabic ? .trailing : .leading)
@@ -141,7 +204,18 @@ struct FamilySettingsView: View {
         switch status.lowercased() {
         case "active": return "نشط"
         case "pending": return "بانتظار القبول"
+        case "invite_expired": return "انتهت الدعوة"
+        case "managed": return "مُدار"
         default: return status
+        }
+    }
+
+    private func statusColor(_ status: String) -> Color {
+        switch status.lowercased() {
+        case "active", "managed":
+            return Color.istsehGreen
+        default:
+            return .orange
         }
     }
 
@@ -173,12 +247,18 @@ struct FamilySettingsView: View {
                 .execute()
                 .value
 
-            patients = rows.map {
+            let visibleRows = rows.filter { Self.isVisibleRelationStatus($0.status) }
+            let inviteStatuses = try await loadInviteStatuses(caregiverID: uidString)
+
+            patients = visibleRows.map {
                 PatientProfile(
                     id: $0.patient_id,
                     firstName: $0.users?.first_name ?? "",
                     lastName: $0.users?.last_name ?? "",
-                    status: $0.status,
+                    status: Self.displayStatus(
+                        relationStatus: $0.status,
+                        inviteStatus: inviteStatuses[$0.patient_id.lowercased()]
+                    ),
                     canPatientAddMeds: $0.can_patient_add_meds,
                     canPatientManageCalendar: $0.can_patient_manage_calendar,
                     notifyPatientMeds: $0.notify_patient_meds,
@@ -191,6 +271,45 @@ struct FamilySettingsView: View {
         } catch {
             print("⚠️ loadPatients failed for \(uidString):", error)
         }
+    }
+
+    private func loadInviteStatuses(caregiverID: String) async throws -> [String: InviteStatus] {
+        struct CodeRow: Decodable {
+            let patient_id: String
+            let status: String
+            let expires_at: String?
+        }
+
+        let rows: [CodeRow] = try await supabase.client
+            .from("care_codes")
+            .select("patient_id, status, expires_at")
+            .eq("caregiver_id", value: caregiverID)
+            .execute()
+            .value
+
+        let formatter = ISO8601DateFormatter()
+        let now = Date()
+        var statuses: [String: InviteStatus] = [:]
+
+        for row in rows {
+            let patientID = row.patient_id.lowercased()
+            if row.status == "used" {
+                statuses[patientID] = .linked
+                continue
+            }
+
+            guard statuses[patientID] != .linked else { continue }
+            if row.status == "active",
+               let rawExpiry = row.expires_at,
+               let expiry = formatter.date(from: rawExpiry),
+               expiry > now {
+                statuses[patientID] = .pending
+            } else if statuses[patientID] == nil {
+                statuses[patientID] = .expired
+            }
+        }
+
+        return statuses
     }
 }
 
@@ -267,16 +386,16 @@ struct CareProfileMenu: View {
     }
 
     private func selectSelf() {
-        settings.stopActingAsPatient()
-        Task { await settings.loadRoutineFromSupabase() }
-        onSelectionChanged()
+        Task {
+            _ = await settings.switchToSelfProfile()
+        }
     }
 
     private func select(_ patient: FamilySettingsView.PatientProfile) {
         guard let pid = UUID(uuidString: patient.id) else { return }
-        settings.actAsPatient(id: pid, displayName: displayName(for: patient))
-        Task { await settings.loadRoutineFromSupabase() }
-        onSelectionChanged()
+        Task {
+            _ = await settings.switchToPatient(id: pid, displayName: displayName(for: patient))
+        }
     }
 
     private func isSelected(_ patient: FamilySettingsView.PatientProfile) -> Bool {
@@ -284,7 +403,7 @@ struct CareProfileMenu: View {
     }
 
     private func displayName(for patient: FamilySettingsView.PatientProfile) -> String {
-        "\(patient.firstName) \(patient.lastName)".trimmingCharacters(in: .whitespacesAndNewlines)
+        FamilySettingsView.displayName(firstName: patient.firstName, lastName: patient.lastName)
     }
 
     private func loadPatients() async {
@@ -315,7 +434,9 @@ struct CareProfileMenu: View {
                 .execute()
                 .value
 
-            patients = rows.map {
+            patients = rows
+                .filter { FamilySettingsView.isVisibleRelationStatus($0.status) }
+                .map {
                 FamilySettingsView.PatientProfile(
                     id: $0.patient_id,
                     firstName: $0.users?.first_name ?? "",
@@ -349,6 +470,46 @@ struct ManagedPatientSettingsView: View {
     @State private var statusMessage: String?
     @State private var isSaving = false
     @State private var showRemoveConfirmation = false
+    @State private var generatedInviteCode: String?
+
+#if DEBUG
+    // DEMO ONLY: Used for marketing video capture.
+    private let demoNotificationDelay: TimeInterval = 5
+    @State private var countdownSeconds = 0
+    @State private var demoTimer: Timer? = nil
+
+    private func startDemoNotification() {
+        let delay = demoNotificationDelay
+        countdownSeconds = Int(delay)
+        
+        Task { @MainActor in
+            let granted = await NotificationsManager.shared.requestAuthorization()
+            if granted {
+                NotificationsManager.shared.scheduleDemoCaregiverMedicationTakenNotification(delaySeconds: delay)
+            }
+        }
+        
+        demoTimer?.invalidate()
+        demoTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            Task { @MainActor in
+                if countdownSeconds > 1 {
+                    countdownSeconds -= 1
+                } else {
+                    countdownSeconds = 0
+                    demoTimer?.invalidate()
+                    demoTimer = nil
+                }
+            }
+        }
+    }
+
+    private func cancelDemoNotification() {
+        demoTimer?.invalidate()
+        demoTimer = nil
+        countdownSeconds = 0
+        NotificationsManager.shared.cancelPendingDemoNotifications()
+    }
+#endif
 
     private var isArabic: Bool { languageCode == "ar" }
     private var supabase: SupabaseManager { .shared }
@@ -374,6 +535,80 @@ struct ManagedPatientSettingsView: View {
             } header: {
                 Text(SettingsL10n.text("Patient Notifications", "تنبيهات المريض"))
             }
+
+            Section {
+                if let generatedInviteCode {
+                    VStack(alignment: isArabic ? .trailing : .leading, spacing: 8) {
+                        Text(SettingsL10n.text("New access code", "رمز الوصول الجديد"))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(normalizedNumericCode(generatedInviteCode))
+                            .font(.system(size: 30, weight: .bold, design: .monospaced))
+                            .tracking(5)
+                        Button(SettingsL10n.text("Copy Code", "نسخ الرمز")) {
+                            UIPasteboard.general.string = normalizedNumericCode(generatedInviteCode)
+                        }
+                        .foregroundStyle(Color.istsehGreen)
+                    }
+                    .frame(maxWidth: .infinity, alignment: isArabic ? .trailing : .leading)
+                    .padding(.vertical, 8)
+                }
+
+                SettingsActionRow(
+                    icon: "key.fill",
+                    text: SettingsL10n.text("Generate New Access Code", "إنشاء رمز وصول جديد"),
+                    iconColor: Color.istsehGreen
+                ) {
+                    Task { await generateNewAccessCode() }
+                }
+                .disabled(isSaving)
+            } header: {
+                Text(SettingsL10n.text("Patient Access", "وصول المريض"))
+            } footer: {
+                Text(SettingsL10n.text(
+                    "Care codes are temporary invitations. Removing an expired code does not remove your caregiver access.",
+                    "رموز الرعاية دعوات مؤقتة. انتهاء الرمز لا يزيل وصولك كمقدم رعاية."
+                ))
+                .multilineTextAlignment(isArabic ? .trailing : .leading)
+            }
+
+#if DEBUG
+            Section {
+                VStack(alignment: isArabic ? .trailing : .leading, spacing: 8) {
+                    Text(isArabic ? "تنبيه تجريبي" : "Demo Notification")
+                        .font(.headline)
+                    
+                    if countdownSeconds > 0 {
+                        Text(isArabic ? "الإشعار خلال \(countdownSeconds) ثانية" : "Notification in \(countdownSeconds)s")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                        
+                        Button(role: .cancel) {
+                            cancelDemoNotification()
+                        } label: {
+                            Text(isArabic ? "إلغاء" : "Cancel")
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                        }
+                        .buttonStyle(.bordered)
+                        .tint(.red)
+                    } else {
+                        Button {
+                            startDemoNotification()
+                        } label: {
+                            Text("Demo: Taken Notification")
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 8)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .tint(Color.istsehGreen)
+                    }
+                }
+                .padding(.vertical, 4)
+            } header: {
+                Text(isArabic ? "العرض التجريبي" : "Demo Notification")
+            }
+#endif
 
             Section {
                 if isTransferring {
@@ -474,6 +709,12 @@ struct ManagedPatientSettingsView: View {
                 .padding(.horizontal, 28)
             }
         }
+        .onDisappear {
+            #if DEBUG
+            demoTimer?.invalidate()
+            demoTimer = nil
+            #endif
+        }
     }
 
     private func savePermissions() async {
@@ -519,6 +760,38 @@ struct ManagedPatientSettingsView: View {
         }
     }
 
+    private func generateNewAccessCode() async {
+        guard let pid = UUID(uuidString: patient.id) else { return }
+        isSaving = true
+        statusMessage = nil
+        defer { isSaving = false }
+
+        do {
+            let response = try await supabase.generateCareCode(for: pid)
+            let finalCode = response.resolvedCode
+            #if DEBUG
+            print("DEBUG: generateCareCode decoded code length=\(finalCode.count), passRegex=\(finalCode.range(of: "^[0-9]{6}$", options: .regularExpression) != nil)")
+            #endif
+            
+            guard finalCode.count == 6, finalCode.range(of: "^[0-9]{6}$", options: .regularExpression) != nil else {
+                statusMessage = "Code was not generated. Please try again."
+                return
+            }
+
+            generatedInviteCode = finalCode
+            statusMessage = SettingsL10n.text("New access code generated.", "تم إنشاء رمز وصول جديد.")
+            onUpdate()
+        } catch {
+            print("⚠️ generateCareCode failed for \(patient.id):", error)
+            statusMessage = SettingsL10n.text("Could not generate a new code: \(error.localizedDescription)", "تعذر إنشاء رمز جديد: \(error.localizedDescription)")
+        }
+    }
+
+    private func normalizedNumericCode(_ code: String) -> String {
+        let digits = code.filter { $0.isWholeNumber }
+        return String(digits.prefix(6))
+    }
+
     private func removeFamilyMember() async {
         guard let pid = UUID(uuidString: patient.id) else { return }
         let pidString = pid.uuidString.lowercased()
@@ -526,15 +799,45 @@ struct ManagedPatientSettingsView: View {
         statusMessage = nil
         defer { isSaving = false }
 
+        #if DEBUG
+        print("removeFamilyMember tapped patientID: \(pidString)")
+        print("activePatientID before: \(SupabaseManager.shared.activePatientID?.uuidString.lowercased() ?? "nil")")
+        print("family member list count before: \(settings.familyMembers.count)")
+        #endif
+
         do {
             try await supabase.removeFamilyMember(patientId: pid)
+            #if DEBUG
+            print("removeFamilyMember backend response: success")
+            #endif
             if SupabaseManager.shared.activePatientID == pid {
-                settings.stopActingAsPatient()
+                _ = await settings.switchToSelfProfile()
             }
+            let patientContext = NotificationsManager.MedicationReminderContext(
+                type: .patient,
+                ownerID: pidString,
+                contextKey: "managed.\(pidString)",
+                patientName: FamilySettingsView.displayName(firstName: patient.firstName, lastName: patient.lastName)
+            )
+            let caregiverContext = NotificationsManager.MedicationReminderContext(
+                type: .caregiver,
+                ownerID: pidString,
+                contextKey: "managed.\(pidString).caregiver",
+                patientName: FamilySettingsView.displayName(firstName: patient.firstName, lastName: patient.lastName)
+            )
+            NotificationsManager.shared.cancelMedicationReminders(for: patientContext)
+            NotificationsManager.shared.cancelMedicationReminders(for: caregiverContext)
             settings.familyMembers.removeAll { $0.lowercased() == pidString }
+            #if DEBUG
+            print("activePatientID after: \(SupabaseManager.shared.activePatientID?.uuidString.lowercased() ?? "nil")")
+            print("family member list count after: \(settings.familyMembers.count)")
+            #endif
             onUpdate()
             dismiss()
         } catch {
+            #if DEBUG
+            print("removeFamilyMember backend response: failure")
+            #endif
             print("⚠️ removeFamilyMember failed for \(pidString):", error)
             statusMessage = SettingsL10n.text("Remove failed: \(error.localizedDescription)", "تعذرت الإزالة: \(error.localizedDescription)")
         }
@@ -584,7 +887,7 @@ struct AddFamilyMemberView: View {
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                         
-                        Text(formatCode(code))
+                        Text(normalizedNumericCode(code))
                             .font(.system(size: 42, weight: .bold, design: .monospaced))
                             .tracking(8)
                             .padding()
@@ -601,7 +904,7 @@ struct AddFamilyMemberView: View {
                             .multilineTextAlignment(isArabic ? .trailing : .leading)
                         
                         Button(SettingsL10n.text("Copy Code", "نسخ الرمز")) {
-                            UIPasteboard.general.string = code
+                            UIPasteboard.general.string = normalizedNumericCode(code)
                         }
                         .buttonStyle(.bordered)
                         .tint(Color.istsehGreen)
@@ -624,8 +927,8 @@ struct AddFamilyMemberView: View {
                             text: $firstName
                         )
                         SettingsEditableTextRow(
-                            title: SettingsL10n.text("Last Name", "اسم العائلة"),
-                            placeholder: SettingsL10n.text("Last Name", "اسم العائلة"),
+                            title: SettingsL10n.text("Last Name (Optional)", "اسم العائلة (اختياري)"),
+                            placeholder: SettingsL10n.text("Last Name (Optional)", "اسم العائلة (اختياري)"),
                             text: $lastName
                         )
                         DatePicker(SettingsL10n.text("Date of Birth", "تاريخ الميلاد"), selection: $dob, in: ...Date(), displayedComponents: .date)
@@ -691,7 +994,7 @@ struct AddFamilyMemberView: View {
                         Button(SettingsL10n.text("Generate Code", "إنشاء الرمز")) {
                             Task { await generateCode() }
                         }
-                        .disabled(firstName.isEmpty || lastName.isEmpty || isSaving)
+                        .disabled(firstName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSaving)
                     }
                 }
             }
@@ -727,9 +1030,21 @@ struct AddFamilyMemberView: View {
                 notifyApps: notifyApps
             )
 
+            let finalCode = response.resolvedCode
+            #if DEBUG
+            print("DEBUG: createFamilyMember decoded code length=\(finalCode.count), passRegex=\(finalCode.range(of: "^[0-9]{6}$", options: .regularExpression) != nil)")
+            #endif
+
+            guard finalCode.count == 6, finalCode.range(of: "^[0-9]{6}$", options: .regularExpression) != nil else {
+                await MainActor.run {
+                    errorText = "Code was not generated. Please try again."
+                }
+                return
+            }
+
             await MainActor.run {
                 settings.role = .caregiver
-                self.generatedCode = response.code
+                self.generatedCode = finalCode
                 onSave(firstName)
             }
         } catch {
@@ -772,12 +1087,8 @@ struct AddFamilyMemberView: View {
         return error.localizedDescription
     }
     
-    private func formatCode(_ code: String) -> String {
-        var res = ""
-        for (i, char) in code.enumerated() {
-            res.append(char)
-            if i == 2 { res.append(" ") }
-        }
-        return res
+    private func normalizedNumericCode(_ code: String) -> String {
+        let digits = code.filter { $0.isWholeNumber }
+        return String(digits.prefix(6))
     }
 }

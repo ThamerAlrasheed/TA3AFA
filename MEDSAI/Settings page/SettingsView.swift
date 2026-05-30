@@ -720,6 +720,7 @@ private struct ReminderSettingsView: View {
     @State private var notifyDoses: Bool = true
     @State private var notifyAppointments: Bool = true
     @State private var notifyCaregiverDoses: Bool = false
+    @State private var notificationPermissionDenied: Bool = false
     @AppStorage("appearance.language") private var languageCode: String =
         Locale.current.language.languageCode?.identifier ?? "en"
     #if DEBUG
@@ -744,8 +745,10 @@ private struct ReminderSettingsView: View {
                 .onChange(of: notificationsEnabled) { _, newVal in
                     Task {
                         if newVal {
-                            _ = await NotificationsManager.shared.requestAuthorization()
+                            let granted = await NotificationsManager.shared.requestAuthorization()
+                            notificationPermissionDenied = !granted
                         } else {
+                            notificationPermissionDenied = false
                             notifyDoses = false
                             notifyAppointments = false
                             notifyCaregiverDoses = false
@@ -753,6 +756,20 @@ private struct ReminderSettingsView: View {
                         }
                         persistReminderSettings()
                         NotificationCenter.default.post(name: NSNotification.Name("UserRoutineChanged"), object: nil)
+                    }
+                }
+
+                if notificationPermissionDenied {
+                    Label {
+                        Text(SettingsL10n.text(
+                            "Notifications are off in iOS Settings. ISTSEH can save your reminders, but alerts will not appear until you allow notifications.",
+                            "التنبيهات متوقفة من إعدادات الآيفون. يقدر ISTSEH يحفظ التذكيرات، لكن التنبيهات ما راح تظهر إلا إذا سمحت بالإشعارات."
+                        ))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    } icon: {
+                        Image(systemName: "bell.slash")
+                            .foregroundStyle(.orange)
                     }
                 }
 
@@ -783,6 +800,10 @@ private struct ReminderSettingsView: View {
             #if DEBUG
             if showDebugContextPanel {
                 Section {
+                    Button(SettingsL10n.text("Demo local medication notification", "تجربة تنبيه دواء محلي")) {
+                        NotificationsManager.shared.scheduleDemoMedicationActionNotification()
+                    }
+
                     Button(SettingsL10n.text("Test self reminder in 15 seconds", "اختبار تذكير شخصي بعد 15 ثانية")) {
                         NotificationsManager.shared.scheduleDebugMedicationReminder(type: .selfUser)
                     }
@@ -814,6 +835,7 @@ private struct ReminderSettingsView: View {
         .tint(Color.istsehGreen)
         .task(id: reminderContextKey) {
             loadReminderSettings()
+            await refreshNotificationPermissionStatus()
         }
         .environment(\.layoutDirection, isArabic ? .rightToLeft : .leftToRight)
     }
@@ -843,6 +865,11 @@ private struct ReminderSettingsView: View {
         NotificationsManager.setReminderSetting(notifyDoses, setting: "doses", contextKey: reminderContextKey)
         NotificationsManager.setReminderSetting(notifyAppointments, setting: "appts", contextKey: reminderContextKey)
         NotificationsManager.setReminderSetting(notifyCaregiverDoses, setting: "caregiverDoses", contextKey: reminderContextKey)
+    }
+
+    private func refreshNotificationPermissionStatus() async {
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        notificationPermissionDenied = notificationsEnabled && settings.authorizationStatus == .denied
     }
 }
 
@@ -890,7 +917,6 @@ struct SettingsNavRow<D: View>: View {
     var showsDivider: Bool = false
     @ViewBuilder var destination: () -> D
     @Environment(\.layoutDirection) private var layoutDirection
-    @State private var isActive = false
 
     private var isRTL: Bool { layoutDirection == .rightToLeft }
     private var rowTextAlignment: TextAlignment { isRTL ? .trailing : .leading }
@@ -898,8 +924,8 @@ struct SettingsNavRow<D: View>: View {
     private var rowFrameAlignment: Alignment { isRTL ? .trailing : .leading }
 
     var body: some View {
-        Button {
-            isActive = true
+        NavigationLink {
+            destination()
         } label: {
             VStack(spacing: 0) {
                 rowContent
@@ -912,21 +938,16 @@ struct SettingsNavRow<D: View>: View {
         }
         .buttonStyle(.plain)
         .listRowSeparator(.hidden)
-        .navigationDestination(isPresented: $isActive) {
-            destination()
-        }
     }
 
     private var rowContent: some View {
         HStack(spacing: 14) {
             if isRTL {
-                chevronView
                 titleStack
                 SettingsIconBadge(systemName: icon, color: iconColor)
             } else {
                 SettingsIconBadge(systemName: icon, color: iconColor)
                 titleStack
-                chevronView
             }
         }
         .frame(maxWidth: .infinity)
@@ -949,12 +970,6 @@ struct SettingsNavRow<D: View>: View {
         .frame(maxWidth: .infinity, alignment: rowFrameAlignment)
     }
 
-    private var chevronView: some View {
-        Image(systemName: isRTL ? "chevron.left" : "chevron.right")
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary.opacity(0.75))
-            .frame(width: 18)
-    }
 }
 
 struct SettingsLinkRow<D: View>: View {
@@ -963,21 +978,27 @@ struct SettingsLinkRow<D: View>: View {
     var iconColor: Color = Color.istsehGreen
     var showsDivider: Bool = false
     @ViewBuilder var destination: () -> D
-    @State private var isActive = false
 
     var body: some View {
-        SettingsActionRow(
-            icon: icon,
-            text: text,
-            iconColor: iconColor,
-            showsChevron: true,
-            showsDivider: showsDivider
-        ) {
-            isActive = true
-        }
-        .navigationDestination(isPresented: $isActive) {
+        NavigationLink {
             destination()
+        } label: {
+            VStack(spacing: 0) {
+                SettingsPlainRow(
+                    icon: icon,
+                    text: text,
+                    iconColor: iconColor,
+                    showsChevron: false
+                )
+                .padding(.vertical, 10)
+
+                if showsDivider {
+                    SettingsRowDivider()
+                }
+            }
         }
+        .buttonStyle(.plain)
+        .listRowSeparator(.hidden)
     }
 }
 

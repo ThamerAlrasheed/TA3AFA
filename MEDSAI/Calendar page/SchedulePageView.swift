@@ -203,7 +203,8 @@ struct SchedulePageView: View {
                     try await SupabaseManager.shared.recordDoseEvent(
                         medId: item.medicationID,
                         scheduledAt: item.scheduledAt,
-                        status: .taken
+                        status: .taken,
+                        source: "calendar_button"
                     )
                 } catch {
                     print("⚠️ Failed to sync dose event:", error)
@@ -222,7 +223,8 @@ struct SchedulePageView: View {
                 try await SupabaseManager.shared.recordDoseEvent(
                     medId: item.medicationID,
                     scheduledAt: item.scheduledAt,
-                    status: .skipped
+                    status: .skipped,
+                    source: "calendar_button"
                 )
             } catch {
                 print("⚠️ Failed to sync skipped event:", error)

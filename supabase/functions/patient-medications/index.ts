@@ -10,7 +10,9 @@ type PatientMedicationRequest = {
   action?: string;
   device_token?: string;
   target_patient_id?: string;
+  patient_id?: string;
   medication?: Record<string, unknown>;
+  dose_event?: Record<string, unknown>;
   appointment?: Record<string, unknown>;
   id?: string;
 };
@@ -19,6 +21,7 @@ type PatientContext = {
   patientId: string;
   actorUserId: string | null;
   actorRole: "regular" | "caregiver" | "patient";
+  deviceSessionId: string | null;
   relation: Record<string, unknown> | null;
 };
 
@@ -54,12 +57,22 @@ Deno.serve(async (req: Request) => {
   const serviceClient = createClient(supabaseURL, serviceRoleKey);
 
   try {
-    const context = await resolvePatientContext(serviceClient, authClient, body);
+    const context = await resolvePatientContext(serviceClient, authClient, body, req);
 
     switch (action) {
       case "list":
         return json({
           medications: await listMedications(serviceClient, context.patientId),
+          permissions: permissionsFor(context),
+        });
+      case "record_dose_event":
+        return json({
+          dose_event: await recordDoseEvent(serviceClient, context, body.dose_event),
+          permissions: permissionsFor(context),
+        });
+      case "list_dose_events":
+        return json({
+          dose_events: await listDoseEvents(serviceClient, context.patientId, body),
           permissions: permissionsFor(context),
         });
       case "save":
@@ -107,9 +120,73 @@ Deno.serve(async (req: Request) => {
   }
 });
 
-async function resolvePatientContext(serviceClient: ReturnType<typeof createClient>, authClient: ReturnType<typeof createClient>, body: PatientMedicationRequest): Promise<PatientContext> {
-  if (body.device_token) {
-    const token = String(body.device_token);
+async function resolvePatientContext(
+  serviceClient: ReturnType<typeof createClient>,
+  authClient: ReturnType<typeof createClient>,
+  body: PatientMedicationRequest,
+  req: Request,
+): Promise<PatientContext> {
+  const authorization = req.headers.get("Authorization") ?? "";
+
+  // Helper to check if a valid Supabase Auth JWT is provided
+  const isAuthUser = (() => {
+    if (!authorization.startsWith("Bearer ")) return false;
+    const token = authorization.substring(7).trim();
+    const parts = token.split(".");
+    if (parts.length !== 3) return false;
+    try {
+      const payload = JSON.parse(atob(parts[1].replace(/-/g, "+").replace(/_/g, "/")));
+      return payload && payload.role === "authenticated";
+    } catch {
+      return false;
+    }
+  })();
+
+  if (isAuthUser) {
+    const { data: userData, error: userError } = await authClient.auth.getUser();
+    if (userError || !userData.user?.id) {
+      throw new FunctionError(401, "Authentication required.");
+    }
+
+    const authUserId = userData.user.id;
+    const requestedPatientId = body.target_patient_id || body.patient_id ? String(body.target_patient_id || body.patient_id) : authUserId;
+    if (requestedPatientId === authUserId) {
+      return {
+        patientId: authUserId,
+        actorUserId: authUserId,
+        actorRole: "regular",
+        deviceSessionId: null,
+        relation: null,
+      };
+    }
+
+    const { data: relation, error } = await serviceClient
+      .from("caregiver_relations")
+      .select("caregiver_id,patient_id,status,can_patient_add_meds,can_patient_manage_calendar,notify_patient_meds,notify_patient_appointments")
+      .eq("caregiver_id", authUserId)
+      .eq("patient_id", requestedPatientId)
+      .in("status", ["active", "pending", "accepted", "linked"])
+      .maybeSingle();
+
+    if (error) throw new FunctionError(500, "Could not validate caregiver relationship.");
+    if (!relation) throw new FunctionError(403, "You do not have access to this patient.");
+
+    return {
+      patientId: requestedPatientId,
+      actorUserId: authUserId,
+      actorRole: "caregiver",
+      deviceSessionId: null,
+      relation,
+    };
+  } else {
+    // Care-code linked patient path (skip auth getUser validation, use device session verification)
+    const token = String(body.device_token ?? "");
+    const requestedPatientId = String(body.patient_id || body.target_patient_id || "");
+
+    if (!token || !requestedPatientId) {
+      throw new FunctionError(400, "patient_id and device_token are required for care-code linked access.");
+    }
+
     const { data: session, error } = await serviceClient
       .from("device_sessions")
       .select("id,user_id")
@@ -118,6 +195,11 @@ async function resolvePatientContext(serviceClient: ReturnType<typeof createClie
 
     if (error) throw new FunctionError(500, "Could not validate device session.");
     if (!session?.user_id) throw new FunctionError(401, "Patient session is invalid or expired.");
+
+    // Validate that patient_id requested matches user_id in the device session
+    if (String(session.user_id) !== requestedPatientId) {
+      throw new FunctionError(403, "Access to the requested patient is forbidden.");
+    }
 
     const { data: revokedDevice, error: deviceError } = await serviceClient
       .from("patient_devices")
@@ -137,43 +219,10 @@ async function resolvePatientContext(serviceClient: ReturnType<typeof createClie
       patientId: String(session.user_id),
       actorUserId: String(session.user_id),
       actorRole: "patient",
+      deviceSessionId: String(session.id),
       relation,
     };
   }
-
-  const { data: userData, error: userError } = await authClient.auth.getUser();
-  if (userError || !userData.user?.id) {
-    throw new FunctionError(401, "Authentication required.");
-  }
-
-  const authUserId = userData.user.id;
-  const requestedPatientId = body.target_patient_id ? String(body.target_patient_id) : authUserId;
-  if (requestedPatientId === authUserId) {
-    return {
-      patientId: authUserId,
-      actorUserId: authUserId,
-      actorRole: "regular",
-      relation: null,
-    };
-  }
-
-  const { data: relation, error } = await serviceClient
-    .from("caregiver_relations")
-    .select("caregiver_id,patient_id,status,can_patient_add_meds,can_patient_manage_calendar,notify_patient_meds,notify_patient_appointments")
-    .eq("caregiver_id", authUserId)
-    .eq("patient_id", requestedPatientId)
-    .eq("status", "active")
-    .maybeSingle();
-
-  if (error) throw new FunctionError(500, "Could not validate caregiver relationship.");
-  if (!relation) throw new FunctionError(403, "You do not have access to this patient.");
-
-  return {
-    patientId: requestedPatientId,
-    actorUserId: authUserId,
-    actorRole: "caregiver",
-    relation,
-  };
 }
 
 async function loadPatientPermissionRelation(serviceClient: ReturnType<typeof createClient>, patientId: string): Promise<Record<string, unknown> | null> {
@@ -181,7 +230,7 @@ async function loadPatientPermissionRelation(serviceClient: ReturnType<typeof cr
     .from("caregiver_relations")
     .select("caregiver_id,patient_id,status,can_patient_add_meds,can_patient_manage_calendar,notify_patient_meds,notify_patient_appointments")
     .eq("patient_id", patientId)
-    .eq("status", "active")
+    .in("status", ["active", "pending", "accepted", "linked"])
     .limit(1)
     .maybeSingle();
 
@@ -220,6 +269,75 @@ async function listMedications(serviceClient: ReturnType<typeof createClient>, p
     .eq("is_active", true);
 
   if (error) throw new FunctionError(500, "Could not load medications.");
+  return data ?? [];
+}
+
+async function recordDoseEvent(serviceClient: ReturnType<typeof createClient>, context: PatientContext, doseEvent: Record<string, unknown> | undefined) {
+  if (!doseEvent) throw new FunctionError(400, "Dose event payload is required.");
+
+  const userMedicationId = requirePayloadString(doseEvent.user_medication_id ?? doseEvent.medication_id, "user_medication_id");
+  const scheduledFor = requirePayloadString(doseEvent.scheduled_for ?? doseEvent.scheduled_at, "scheduled_for");
+  const status = requireDoseStatus(doseEvent.status);
+  const source = requireDoseSource(doseEvent.source, context.actorRole);
+
+  const { data: med, error: medError } = await serviceClient
+    .from("user_medications")
+    .select("id")
+    .eq("id", userMedicationId)
+    .eq("user_id", context.patientId)
+    .maybeSingle();
+
+  if (medError) throw new FunctionError(500, "Could not validate medication ownership.");
+  if (!med) throw new FunctionError(404, "Medication was not found for this patient.");
+
+  const now = new Date().toISOString();
+  const row: Record<string, unknown> = {
+    id: crypto.randomUUID(),
+    patient_id: context.patientId,
+    user_medication_id: userMedicationId,
+    scheduled_for: scheduledFor,
+    status,
+    taken_at: status === "taken" ? now : null,
+    recorded_by: context.actorUserId,
+    source,
+    device_session_id: context.deviceSessionId,
+  };
+
+  const { data, error } = await serviceClient
+    .from("medication_dose_events")
+    .upsert(row, { onConflict: "patient_id,user_medication_id,scheduled_for" })
+    .select("id")
+    .single();
+
+  if (error) {
+    console.error("patient-medications dose event insert failed", {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      hint: error.hint,
+    });
+    throw new FunctionError(500, "Could not record dose event.");
+  }
+
+  return data;
+}
+
+async function listDoseEvents(serviceClient: ReturnType<typeof createClient>, patientId: string, body: PatientMedicationRequest) {
+  const start = body.dose_event?.start ? String(body.dose_event.start) : null;
+  const end = body.dose_event?.end ? String(body.dose_event.end) : null;
+
+  let query = serviceClient
+    .from("medication_dose_events")
+    .select("id,patient_id,user_medication_id,scheduled_for,status,taken_at,source,device_session_id,created_at")
+    .eq("patient_id", patientId)
+    .order("created_at", { ascending: false })
+    .limit(300);
+
+  if (start) query = query.gte("scheduled_for", start);
+  if (end) query = query.lt("scheduled_for", end);
+
+  const { data, error } = await query;
+  if (error) throw new FunctionError(500, "Could not load dose events.");
   return data ?? [];
 }
 
@@ -309,12 +427,16 @@ function compatibleMedicationRow(
     end_date: medication.end_date,
     notes: medication.notes,
     is_active: medication.is_active ?? true,
+    // Visual fields are always preserved — they are lightweight string
+    // columns that exist in every schema version (added in migration
+    // 20260522165400). Dropping them caused family-member medication
+    // custom icons to silently revert to defaults.
+    visual_shape: medication.visual_shape,
+    visual_color: medication.visual_color,
+    visual_background_color: medication.visual_background_color,
   };
 
   if (includeDisplayFields) {
-    row.visual_shape = medication.visual_shape;
-    row.visual_color = medication.visual_color;
-    row.visual_background_color = medication.visual_background_color;
     row.medication_form = medication.medication_form;
     row.schedule_mode = medication.schedule_mode;
     row.times_per_day = medication.times_per_day;
@@ -438,6 +560,30 @@ function requireID(id: string | undefined): string {
   const value = String(id ?? "");
   if (!value) throw new FunctionError(400, "id is required.");
   return value;
+}
+
+function requirePayloadString(value: unknown, name: string): string {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) throw new FunctionError(400, `${name} is required.`);
+  return normalized;
+}
+
+function requireDoseStatus(value: unknown): string {
+  const normalized = String(value ?? "").trim();
+  if (normalized === "taken" || normalized === "skipped" || normalized === "missed") {
+    return normalized;
+  }
+  throw new FunctionError(400, "Dose status must be taken, skipped, or missed.");
+}
+
+function requireDoseSource(value: unknown, actorRole: PatientContext["actorRole"]): string {
+  const normalized = String(value ?? "").trim();
+  if (["today_button", "calendar_button", "notification_action", "patient_device", "caregiver", "system"].includes(normalized)) {
+    return normalized;
+  }
+  if (actorRole === "patient") return "patient_device";
+  if (actorRole === "caregiver") return "caregiver";
+  return "today_button";
 }
 
 function json(body: unknown, status = 200): Response {

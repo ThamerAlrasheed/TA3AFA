@@ -11,6 +11,9 @@ extension Notification.Name {
 @MainActor
 final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
     static let shared = NotificationsManager()
+    // TODO: Real caregiver APNs remote push requires paid Apple Developer Program account and Push Notifications capability.
+    // Local notification reminders/actions continue to work without the APNs entitlement.
+    private static let remotePushEnabled = false
 
     struct IDs {
         static let doseCategory = "MEDICATION_REMINDER"
@@ -39,6 +42,7 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private let medicationScheduleWindowDays = 7
+    private var medicationRefreshTask: Task<Void, Never>?
 
     private override init() {
         super.init()
@@ -46,9 +50,10 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func configure() {
-        let takeAction = UNNotificationAction(identifier: IDs.takeAction, title: "Log as Taken", options: [])
-        let skipAction = UNNotificationAction(identifier: IDs.skipAction, title: "Log as Skipped", options: [])
-        let remindLaterAction = UNNotificationAction(identifier: IDs.remindLaterAction, title: "Remind Me in 10 Minutes", options: [])
+        let isArabic = Self.appLanguageCode() == "ar"
+        let takeAction = UNNotificationAction(identifier: IDs.takeAction, title: isArabic ? "تم أخذ الدواء" : "Taken", options: [])
+        let skipAction = UNNotificationAction(identifier: IDs.skipAction, title: isArabic ? "تخطي" : "Skip", options: [])
+        let remindLaterAction = UNNotificationAction(identifier: IDs.remindLaterAction, title: isArabic ? "ذكرني بعد 15 دقيقة" : "Remind Me in 15 Minutes", options: [])
 
         let doseCategory = UNNotificationCategory(
             identifier: IDs.doseCategory,
@@ -71,7 +76,35 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
             options: []
         )
 
-        UNUserNotificationCenter.current().setNotificationCategories([doseCategory, apptCategory, refillCategory])
+        var categories = Set([doseCategory, apptCategory, refillCategory])
+
+        #if DEBUG
+        let demoTakeAction = UNNotificationAction(
+            identifier: "DEMO_ACTION_TAKEN",
+            title: "تم أخذ الدواء",
+            options: []
+        )
+        let demoSkipAction = UNNotificationAction(
+            identifier: "DEMO_ACTION_SKIP",
+            title: "تخطي",
+            options: []
+        )
+        let demoRemindAction = UNNotificationAction(
+            identifier: "DEMO_ACTION_REMIND_15",
+            title: "ذكرني بعد 15 دقيقة",
+            options: []
+        )
+
+        let demoCategory = UNNotificationCategory(
+            identifier: "DEMO_CAREGIVER_MED_TAKEN",
+            actions: [demoTakeAction, demoSkipAction, demoRemindAction],
+            intentIdentifiers: [],
+            options: .customDismissAction
+        )
+        categories.insert(demoCategory)
+        #endif
+
+        UNUserNotificationCenter.current().setNotificationCategories(categories)
     }
 
     func requestAuthorization() async -> Bool {
@@ -79,12 +112,43 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
             let granted = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
             if !granted {
                 print("Notifications permission is denied. Medication reminders will not be delivered until enabled in Settings.")
+            } else if Self.remotePushEnabled {
+                registerForRemoteNotifications()
             }
             return granted
         } catch {
             print("Notification authorization request failed:", error.localizedDescription)
             return false
         }
+    }
+
+    func registerForRemoteNotificationsIfAuthorized() {
+        guard Self.remotePushEnabled else { return }
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
+            Task { @MainActor in
+                self.registerForRemoteNotifications()
+            }
+        }
+    }
+
+    func handleRemoteNotificationToken(_ deviceToken: Data) async {
+        guard Self.remotePushEnabled else { return }
+        let token = deviceToken.map { String(format: "%02x", $0) }.joined()
+        UserDefaults.standard.set(token, forKey: "apnsDeviceToken")
+        let deviceID = UIDevice.current.identifierForVendor?.uuidString.lowercased()
+        let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+
+        await SupabaseManager.shared.upsertPushToken(
+            token: token,
+            environment: Self.apnsEnvironment,
+            deviceID: deviceID,
+            appVersion: appVersion
+        )
+    }
+
+    private func registerForRemoteNotifications() {
+        UIApplication.shared.registerForRemoteNotifications()
     }
 
     func schedule(
@@ -157,6 +221,22 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
         return Locale.current.language.languageCode?.identifier == "ar" ? "ar" : "en"
     }
 
+    static var apnsEnvironment: String {
+        #if DEBUG
+        return "sandbox"
+        #else
+        return "production"
+        #endif
+    }
+
+    static var currentDeviceIdentifier: String? {
+        UIDevice.current.identifierForVendor?.uuidString.lowercased()
+    }
+
+    static var currentAPNSToken: String? {
+        UserDefaults.standard.string(forKey: "apnsDeviceToken")
+    }
+
     static func medicationDoseKey(medID: String, scheduledAt date: Date, ownerID: String? = nil) -> String {
         let owner = ownerID ?? currentMedicationBaseContext().ownerID
         return "\(owner)_\(medID)_\(Int(date.timeIntervalSince1970))"
@@ -182,7 +262,7 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
                 .joined(separator: " ")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             return MedicationReminderContext(
-                type: .selfUser,
+                type: .patient,
                 ownerID: ownerID,
                 contextKey: "patient.\(ownerID)",
                 patientName: name.isEmpty ? nil : name
@@ -238,8 +318,7 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
 
         if baseContext.type == .patient,
            Self.reminderSetting("caregiverDoses", contextKey: baseContext.contextKey) {
-            // TODO: True caregiver alerts across devices need backend/APNs fan-out:
-            // store caregiver device tokens, create server-side due-dose jobs, and send push notifications per patient relation.
+            // Local caregiver due reminders on this device. Separate APNs fan-out handles taken/skipped updates.
             let caregiverContext = MedicationReminderContext(
                 type: .caregiver,
                 ownerID: baseContext.ownerID,
@@ -251,13 +330,84 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
         }
     }
 
-    func scheduleMedicationReminders(for med: LocalMed, context: MedicationReminderContext) {
+    func refreshMedicationNotifications(for meds: [LocalMed], reason: String) {
+        let context = Self.currentMedicationBaseContext()
+        let medsSnapshot = meds
+        medicationRefreshTask?.cancel()
+        medicationRefreshTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            await self?.performMedicationNotificationRefresh(
+                meds: medsSnapshot,
+                context: context,
+                reason: reason
+            )
+        }
+    }
+
+    private func performMedicationNotificationRefresh(
+        meds: [LocalMed],
+        context: MedicationReminderContext,
+        reason: String
+    ) async {
+        let settings = await notificationSettings()
+        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
+            #if DEBUG
+            print("Medication notification refresh skipped: authorization=\(settings.authorizationStatus.rawValue) context=\(context.contextKey) reason=\(reason)")
+            #endif
+            return
+        }
+
+        let pending = await pendingNotificationRequests()
+        let prefix = medicationNotificationPrefix(context: context)
+        let legacyPrefix = legacyMedicationNotificationPrefix(context: context)
+        let idsToCancel = pending
+            .filter { $0.identifier.hasPrefix(prefix) || $0.identifier.hasPrefix(legacyPrefix) }
+            .map(\.identifier)
+        if !idsToCancel.isEmpty {
+            UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: idsToCancel)
+        }
+
+        var scheduledCount = 0
+        var skippedCount = 0
+        for med in meds {
+            guard !Task.isCancelled else { return }
+            guard !med.isArchived else {
+                skippedCount += 1
+                continue
+            }
+
+            if med.refillReminderEnabled {
+                scheduleRefillReminder(for: med, context: context)
+            }
+
+            guard med.remindersEnabled,
+                  !med.scheduleMode.isPRN,
+                  !med.asNeeded,
+                  Self.reminderSetting("enabled", contextKey: context.contextKey),
+                  Self.reminderSetting("doses", contextKey: context.contextKey) else {
+                skippedCount += 1
+                continue
+            }
+
+            scheduledCount += scheduleMedicationReminders(for: med, context: context)
+        }
+
+        #if DEBUG
+        print("Medication notification refresh summary context=\(context.contextKey) reason=\(reason) meds=\(meds.count) cancelled=\(idsToCancel.count) scheduled=\(scheduledCount) skipped=\(skippedCount)")
+        await debugPendingMedicationNotifications()
+        #endif
+    }
+
+    @discardableResult
+    func scheduleMedicationReminders(for med: LocalMed, context: MedicationReminderContext) -> Int {
         let times = med.dosageTimes.compactMap(parseDoseTime)
-        guard !times.isEmpty else { return }
-        guard !med.asNeeded || !med.dosageTimes.isEmpty else { return }
+        guard !times.isEmpty else { return 0 }
+        guard !med.asNeeded || !med.dosageTimes.isEmpty else { return 0 }
 
         let cal = Calendar.current
         let today = cal.startOfDay(for: Date())
+        var scheduledCount = 0
 
         for dayOffset in 0..<medicationScheduleWindowDays {
             guard let date = cal.date(byAdding: .day, value: dayOffset, to: today) else { continue }
@@ -281,8 +431,10 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
                 case .caregiver:
                     scheduleCaregiverMedicationReminder(med, context: context, at: triggerDate, doseIndex: index)
                 }
+                scheduledCount += 1
             }
         }
+        return scheduledCount
     }
 
     func scheduleSelfMedicationReminder(_ med: LocalMed, context: MedicationReminderContext, at date: Date, doseIndex: Int) {
@@ -332,6 +484,34 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
             timeSensitive: true,
             userInfo: userInfo
         )
+        scheduleMissedDoseFollowUp(for: med, context: context, at: date, doseKey: doseKey, userInfo: userInfo)
+    }
+
+    private func scheduleMissedDoseFollowUp(
+        for med: LocalMed,
+        context: MedicationReminderContext,
+        at date: Date,
+        doseKey: String,
+        userInfo: [String: Any]
+    ) {
+        guard context.supportsDoseActions else { return }
+        guard let followUpDate = Calendar.current.date(byAdding: .minute, value: 45, to: date), followUpDate > Date() else { return }
+
+        let isArabic = Self.appLanguageCode() == "ar"
+        let medName = DoseTextFormatter.medicationTitle(med.name)
+        var followUpInfo = userInfo
+        followUpInfo["isMissedFollowUp"] = true
+
+        schedule(
+            id: "DOSE_FU_\(doseKey)",
+            title: isArabic ? "نسيت الجرعة؟" : "Missed Dose?",
+            body: isArabic ? "أخذت \(medName)؟ سجلها كـ تم أخذها أو تخطي." : "Did you take \(medName)? Mark it as taken or skipped.",
+            at: followUpDate,
+            categoryId: IDs.doseCategory,
+            threadIdentifier: "medication-reminders",
+            timeSensitive: true,
+            userInfo: followUpInfo
+        )
     }
 
     func cancelReminders(for medId: String) {
@@ -357,18 +537,38 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
 
     func cancelMedicationReminders(for context: MedicationReminderContext) {
         let prefix = medicationNotificationPrefix(context: context)
+        let legacyPrefix = legacyMedicationNotificationPrefix(context: context)
         UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
-            let ids = requests.filter { $0.identifier.hasPrefix(prefix) }.map(\.identifier)
+            let ids = requests
+                .filter { $0.identifier.hasPrefix(prefix) || $0.identifier.hasPrefix(legacyPrefix) }
+                .map(\.identifier)
             if !ids.isEmpty {
                 UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids)
             }
         }
     }
 
+    func debugPendingMedicationNotifications() async {
+        let requests = await pendingNotificationRequests()
+            .filter { $0.identifier.hasPrefix("istseh.medDose.") || $0.identifier.hasPrefix("MED.") }
+            .sorted { $0.identifier < $1.identifier }
+        let grouped = Dictionary(grouping: requests) { request in
+            request.content.userInfo["ownerPatientId"] as? String ?? "unknown"
+        }
+        let summary = grouped.map { "\($0.key)=\($0.value.count)" }.sorted().joined(separator: ", ")
+        print("Pending ISTSEH medication notifications: total=\(requests.count) byContext=[\(summary)]")
+        for request in requests.prefix(5) {
+            print("Pending med notification:", request.identifier, request.content.title, request.content.body)
+        }
+    }
+
     func cancelMedicationReminders(for medId: String, context: MedicationReminderContext) {
         let prefix = "\(medicationNotificationPrefix(context: context))\(stableIdentifierComponent(medId))."
+        let legacyPrefix = "\(legacyMedicationNotificationPrefix(context: context))\(stableIdentifierComponent(medId))."
         UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
-            let ids = requests.filter { $0.identifier.hasPrefix(prefix) }.map(\.identifier)
+            let ids = requests
+                .filter { $0.identifier.hasPrefix(prefix) || $0.identifier.hasPrefix(legacyPrefix) }
+                .map(\.identifier)
             if !ids.isEmpty {
                 UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ids)
             }
@@ -468,13 +668,47 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
                 )
             )
         }
-        for med in meds { updateReminders(for: med) }
+        refreshMedicationNotifications(for: meds, reason: "refresh_all")
         for appt in appts { updateAppointmentReminders(for: appt, settings: settings) }
     }
 
     // MARK: - DEBUG Real-device Test Helpers
 
     #if DEBUG
+    func scheduleDemoMedicationActionNotification() {
+        let content = UNMutableNotificationContent()
+        content.title = "تم أخذ الدواء"
+        content.body = "أم مريم أخذت بانادول."
+        content.sound = .default
+        content.categoryIdentifier = IDs.doseCategory
+        content.threadIdentifier = "medication-reminders"
+        content.userInfo = [
+            "medicationId": "00000000-0000-0000-0000-000000000102",
+            "medId": "00000000-0000-0000-0000-000000000102",
+            "doseId": "demoDoseAction",
+            "doseKey": "demoDoseAction",
+            "ownerPatientId": SupabaseManager.shared.currentUserID?.uuidString.lowercased() ?? "local",
+            "contextType": MedicationReminderContextType.patient.rawValue,
+            "scheduledAt": ISO8601DateFormatter().string(from: Date()),
+            "notificationCategory": IDs.doseCategory,
+            "doseText": "500 mg",
+            "snoozeCount": 0,
+            "isDemo": true
+        ]
+
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 5, repeats: false)
+        let request = UNNotificationRequest(
+            identifier: "MED.demo.localAction.\(Int(Date().timeIntervalSince1970))",
+            content: content,
+            trigger: trigger
+        )
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                print("Demo medication notification scheduling failed:", error.localizedDescription)
+            }
+        }
+    }
+
     func scheduleDebugMedicationReminder(type: MedicationReminderContextType) {
         let base = Self.currentMedicationBaseContext()
         let context: MedicationReminderContext
@@ -541,6 +775,16 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
             Task { @MainActor in
                 self.scheduleSnoozedMedicationReminder(from: response.notification.request.content)
             }
+        #if DEBUG
+        case "DEMO_ACTION_TAKEN":
+            print("DEMO caregiver notification action: taken")
+        case "DEMO_ACTION_SKIP":
+            print("DEMO caregiver notification action: skipped")
+        case "DEMO_ACTION_REMIND_15":
+            Task { @MainActor in
+                self.scheduleDemoCaregiverMedicationTakenNotification(delaySeconds: Self.demoRemindDelay)
+            }
+        #endif
         default:
             break
         }
@@ -556,7 +800,7 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
 
         let scheduledAt = (userInfo["scheduledAt"] as? String).flatMap { ISO8601DateFormatter().date(from: $0) } ?? Date()
         let ownerID = (userInfo["ownerPatientId"] as? String).flatMap(UUID.init(uuidString:))
-        let source = (userInfo["contextType"] as? String) ?? "notification"
+        let source = "notification_action"
 
         Task { @MainActor in
             CompletionStore.markDoseDone(key)
@@ -589,7 +833,7 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
         nextUserInfo["snoozeCount"] = snoozeCount + 1
         nextUserInfo["isSnoozeReminder"] = true
 
-        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 10 * 60, repeats: false)
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 15 * 60, repeats: false)
         let nextContent = UNMutableNotificationContent()
         nextContent.title = content.title
         nextContent.subtitle = content.subtitle.isEmpty ? snoozeSubtitle() : content.subtitle
@@ -615,7 +859,7 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func snoozeSubtitle() -> String {
-        Self.appLanguageCode() == "ar" ? "تذكير بعد 10 دقائق" : "Reminder in 10 minutes"
+        Self.appLanguageCode() == "ar" ? "تذكير بعد 15 دقيقة" : "Reminder in 15 minutes"
     }
 
     private func snoozeBody(originalBody: String) -> String {
@@ -639,27 +883,29 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
             foodRule: med.foodRule,
             sourceBacked: med.foodRuleSource == "source"
         ) ? med.foodRuleLabel(isArabic: isArabic) : ""
-        let detail = [doseText, foodText]
+        let doseLine = doseText.isEmpty ? "" : (isArabic ? "الجرعة: \(doseText)." : "Dose: \(doseText).")
+        let foodLine = foodText.isEmpty ? "" : (isArabic ? foodText : foodText)
+        let detailLines = [doseLine, foodLine]
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
-            .joined(separator: isArabic ? "، " : ". ")
+        let detail = detailLines.joined(separator: "\n")
         let subtitle = isArabic ? "مجدول في \(timeString(for: date))" : "Scheduled for \(timeString(for: date))"
         let patientName = context.patientName?.trimmingCharacters(in: .whitespacesAndNewlines)
         let safePatientName = (patientName?.isEmpty == false) ? patientName! : fallbackPatientName()
 
         switch (context.type, isArabic) {
         case (.selfUser, false):
-            let body = detail.isEmpty ? "\(medName) is due now. Tap to log it." : "\(medName) is due now. \(detail)."
+            let body = detail.isEmpty ? "\(medName) is due now." : "\(medName) is due now.\n\(detail)"
             return ("Medication Reminder", subtitle, body)
         case (.selfUser, true):
-            let body = detail.isEmpty ? "\(medName) مستحق الآن. اضغط لتسجيله." : "\(medName) مستحق الآن. \(detail)."
-            return ("تذكير بالدواء", subtitle, body)
+            let body = detail.isEmpty ? "حان وقت \(medName)." : "حان وقت \(medName).\n\(detail)"
+            return ("تذكير الدواء", subtitle, body)
         case (.patient, false):
-            let body = detail.isEmpty ? "\(safePatientName): \(medName) is due now." : "\(safePatientName): \(medName) is due now. \(detail)."
+            let body = detail.isEmpty ? "\(medName) is due now." : "\(medName) is due now.\n\(detail)"
             return ("Medication Reminder", subtitle, body)
         case (.patient, true):
-            let body = detail.isEmpty ? "\(safePatientName): \(medName) مستحق الآن." : "\(safePatientName): \(medName) مستحق الآن. \(detail)."
-            return ("تذكير بالدواء", subtitle, body)
+            let body = detail.isEmpty ? "حان وقت \(medName)." : "حان وقت \(medName).\n\(detail)"
+            return ("تذكير الدواء", subtitle, body)
         case (.caregiver, false):
             let body = detail.isEmpty ? "\(safePatientName) has a medication due now: \(medName)." : "\(safePatientName) has \(medName) due now. \(detail)."
             return ("Caregiver Reminder", subtitle, body)
@@ -675,7 +921,7 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
         }
         let trimmed = med.dosage.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmed.isEmpty { return trimmed }
-        return isArabic ? "جرعة واحدة" : "1 dose"
+        return ""
     }
 
     private func timeString(for date: Date) -> String {
@@ -700,11 +946,80 @@ final class NotificationsManager: NSObject, UNUserNotificationCenterDelegate {
     }
 
     private func medicationNotificationPrefix(context: MedicationReminderContext) -> String {
+        let scope: String
+        switch context.type {
+        case .selfUser:
+            scope = "self_\(context.ownerID)"
+        case .patient:
+            scope = "patient_\(context.ownerID)"
+        case .caregiver:
+            scope = "caregiver_\(context.ownerID)"
+        }
+        return "MED.\(stableIdentifierComponent(scope))."
+    }
+
+    private func legacyMedicationNotificationPrefix(context: MedicationReminderContext) -> String {
         "MED.\(stableIdentifierComponent(context.contextKey))."
+    }
+
+    private func notificationSettings() async -> UNNotificationSettings {
+        await withCheckedContinuation { continuation in
+            UNUserNotificationCenter.current().getNotificationSettings { settings in
+                continuation.resume(returning: settings)
+            }
+        }
+    }
+
+    private func pendingNotificationRequests() async -> [UNNotificationRequest] {
+        await withCheckedContinuation { continuation in
+            UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
+                continuation.resume(returning: requests)
+            }
+        }
     }
 
     private func stableIdentifierComponent(_ value: String) -> String {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
         return value.unicodeScalars.map { allowed.contains($0) ? Character($0).description : "_" }.joined()
+    }
+
+    #if DEBUG
+    /// DEMO ONLY: Delay for demo reminder follow-up.
+    static let demoRemindDelay: TimeInterval = 10
+    #endif
+
+    /// DEMO ONLY: Used for marketing video capture.
+    /// Remove before production release.
+    func scheduleDemoCaregiverMedicationTakenNotification(delaySeconds: TimeInterval) {
+        let content = UNMutableNotificationContent()
+        content.title = "تم أخذ الدواء"
+        content.body = "أم مريم أخذت بانادول."
+        content.sound = .default
+        content.interruptionLevel = .timeSensitive
+        #if DEBUG
+        content.categoryIdentifier = "DEMO_CAREGIVER_MED_TAKEN"
+        #endif
+
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: delaySeconds, repeats: false)
+        let identifier = "DEMO.caregiver.medTaken.\(UUID().uuidString)"
+        let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
+
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error {
+                print("Demo notification scheduling failed:", error.localizedDescription)
+            }
+        }
+    }
+
+    /// DEMO ONLY: Cancel any pending demo notifications.
+    func cancelPendingDemoNotifications() {
+        UNUserNotificationCenter.current().getPendingNotificationRequests { requests in
+            let demoIds = requests
+                .filter { $0.identifier.hasPrefix("DEMO.caregiver.medTaken.") }
+                .map(\.identifier)
+            if !demoIds.isEmpty {
+                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: demoIds)
+            }
+        }
     }
 }

@@ -76,7 +76,7 @@ struct ISTSEHLoadingView: View {
 
     private var fullScreenBody: some View {
         VStack(spacing: 18) {
-            loadingGIF(size: 112)
+            loadingGIF(size: fullScreenGIFSize)
             messageText(font: .system(.headline, design: .rounded).weight(.semibold), color: Color.istsehGreen)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -85,7 +85,7 @@ struct ISTSEHLoadingView: View {
 
     private var cardBody: some View {
         VStack(spacing: 14) {
-            loadingGIF(size: 78)
+            loadingGIF(size: cardGIFSize)
             messageText(font: .system(.subheadline, design: .rounded).weight(.semibold), color: .secondary)
         }
         .padding(22)
@@ -103,7 +103,7 @@ struct ISTSEHLoadingView: View {
 
     private var inlineBody: some View {
         HStack(spacing: 10) {
-            loadingGIF(size: 34)
+            loadingGIF(size: 52)
 
             messageText(font: .system(.subheadline, design: .rounded), color: .secondary)
         }
@@ -111,7 +111,15 @@ struct ISTSEHLoadingView: View {
     }
 
     private var compactBody: some View {
-        loadingGIF(size: 34)
+        loadingGIF(size: 24)
+    }
+
+    private var fullScreenGIFSize: CGFloat {
+        220
+    }
+
+    private var cardGIFSize: CGFloat {
+        150
     }
 
     private func messageText(font: Font, color: Color) -> some View {

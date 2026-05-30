@@ -67,8 +67,7 @@ struct MedicalProfileView: View {
             .avoidsTabBar()
 
             if isLoading && selectedAllergies.isEmpty && selectedConditions.isEmpty {
-                BrandedLoadingView(message: LoadingMessage.profile.text, style: .card)
-                    .padding(.horizontal, 28)
+                ISTSEHLoadingView(message: LoadingMessage.profile.text, style: .fullScreen)
             }
         }
         .safeAreaInset(edge: .bottom) {

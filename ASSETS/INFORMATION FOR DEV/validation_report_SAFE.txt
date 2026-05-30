@@ -1,0 +1,24 @@
+VALIDATION REPORT
+=================
+Original file: MOHDrugPrice_17Nov2025_KSP_only_Composition_Indications (1) (1)(1).xlsx
+Safe file: MOHDrugPrice_17Nov2025_KSP_enriched_SAFE.xlsx
+
+Validation Result: PASS
+
+Structural Checks:
+- Same sheet names: Yes
+- Same dimensions: Yes
+- Same headers: Yes
+- No original non-empty values changed: Yes
+- No price cells changed: Yes
+- No product/manufacturer cells changed: Yes
+- No styles changed: Yes
+- Only missing cells were filled: Yes
+
+Fill Statistics:
+- Total rows scanned: 6159
+- Total cells filled: 129
+- Fill counts per column: {'Ingredients (Composition)': 122, 'Indications': 7}
+
+Warnings and Errors:
+None. All checks passed.

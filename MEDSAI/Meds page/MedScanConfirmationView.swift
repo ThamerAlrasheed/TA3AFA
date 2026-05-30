@@ -124,7 +124,8 @@ struct MedScanConfirmationView: View {
                     Button(action: confirmMedication) {
                         HStack {
                             if isFetchingIntel {
-                                ProgressView().tint(.white)
+                                ISTSEHLoadingView(message: "", style: .compact)
+                                    .frame(width: 24, height: 24)
                             }
                             Text("Confirm Medication")
                                 .bold()
@@ -297,7 +298,8 @@ struct MedScanConfirmationView: View {
             Button(action: runImageFallback) {
                 HStack {
                     if isRunningFallback {
-                        ProgressView()
+                        ISTSEHLoadingView(message: "", style: .compact)
+                            .frame(width: 24, height: 24)
                     }
                     Label("Try AI Image Recognition", systemImage: "sparkles")
                 }

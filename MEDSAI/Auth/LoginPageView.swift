@@ -90,7 +90,10 @@ struct LoginPageView: View {
                 Task { await completeAuth() }
             } label: {
                 HStack {
-                    if isLoading { ProgressView().controlSize(.small) }
+                    if isLoading {
+                        ISTSEHLoadingView(message: "", style: .compact)
+                            .frame(width: 24, height: 24)
+                    }
                     Text("Log In")
                         .font(.headline)
                         .frame(maxWidth: .infinity)
